@@ -315,11 +315,29 @@ same two public addresses on the other socket, so the path was open while
 the punch failed. Windows dialled `180.252.216.153/udp/63006`, which is
 this machine's true address, and nothing of it arrived.
 
-What is left is what the two sockets carry. punchtest sends bytes with no
-shape; libp2p sends QUIC Initials. `punch-quic` is the control that
-separates them, and it has never been run in a window where the raw punch
-was known to be open — every earlier attempt was aimed at a stale port.
-Run it before writing another line of transport code.
+`punch-quic` then removed the last difference. On those same two
+networks, minutes later: 74 and 75 bare packets crossed, a QUIC handshake
+completed over the punched socket, and a stream carried bytes both ways
+in each direction. The path passes punched QUIC.
+
+So nothing outside this repository is at fault. The carriers punch, they
+pass QUIC, both NATs are endpoint-independent — proved twice tonight by a
+STUN-learned port that a third party then reached — and quic-go crosses
+them unaided. What fails is how we drive libp2p.
+
+The measurement that narrows it further is already in hand and was
+misread once: in the failing run the Mac received **zero** packets from
+the peer on any port, while its own punch left the right socket for the
+advertised port. A home NAT that has sent to 182.6.165.5:14988 accepts
+the reply from 182.6.165.5:14988. Receiving nothing means the peer's
+packets arrived from some other port — that is, the port Windows
+advertises is not the port Windows punches from.
+
+Windows holds seven interfaces. go-libp2p's quicreuse keeps dial sockets
+apart from listen sockets, and a punch that leaves a dial socket carries
+a mapping nobody advertised. Confirm it by listing the UDP ports the
+agent holds during a failing dial, then make the punch leave the socket
+whose address was published.
 
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
