@@ -33,19 +33,38 @@ func punchtest() error {
 
 	local := c.LocalAddr().(*net.UDPAddr)
 	var mapped string
+	var keepalive *net.UDPAddr
 	for _, s := range stun.Servers() {
 		if r := stun.Ask(c, s); r.Err == nil {
 			mapped = r.Mapped
+			keepalive, _ = net.ResolveUDPAddr("udp4", s)
 			break
 		}
 	}
-	if mapped == "" {
+	if mapped == "" || keepalive == nil {
 		return fmt.Errorf("no reflector answered, so this machine cannot name itself")
 	}
 
 	fmt.Printf("local port %d\n\n", local.Port)
 	fmt.Printf("  MY PUNCH ADDRESS:  %s\n\n", mapped)
 	fmt.Print("paste the other machine's punch address, then press enter: ")
+
+	// Carrying an address to the other machine by hand takes minutes,
+	// and a NAT forgets an idle UDP mapping in about one. Without this
+	// the address printed above expires while the operator is still
+	// typing it, and the test would measure nothing but that.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(15 * time.Second):
+				c.WriteToUDP([]byte{0}, keepalive)
+			}
+		}
+	}()
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
@@ -75,6 +94,9 @@ func punchtest() error {
 		n, from, err := c.ReadFromUDP(buf)
 		if err != nil {
 			break
+		}
+		if !from.IP.Equal(peer.IP) {
+			continue // a reflector answering the keepalive, not a punch
 		}
 		got++
 		if got <= 3 {
