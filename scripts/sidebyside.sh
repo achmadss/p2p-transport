@@ -77,10 +77,19 @@ TEXT
 # The far side names itself by writing to the witness on the very socket
 # it punches with, so there is no address to carry by hand. Our own
 # witness packets are in that same log and are excluded by address.
+#
+# Only lines written after this moment count. The log keeps every earlier
+# run, and a previous punchtest's port sits in the last few lines looking
+# exactly like a live one; aiming at it sends the whole test to a mapping
+# that closed minutes ago and reports nothing arrived, which is the
+# failure being investigated. Read the length first, then read past it.
+mark=$(run ssh -o BatchMode=yes -o ConnectTimeout=5 "$me@$relay" \
+	'wc -l < ~/r9500.log' 2>/dev/null | tr -d ' ')
+: "${mark:=0}"
 peer=""
 for _ in $(seq 1 60); do
 	peer=$(run ssh -o BatchMode=yes -o ConnectTimeout=5 "$me@$relay" \
-		'tail -80 ~/r9500.log | grep "probe from" | grep " 7 bytes"' 2>/dev/null |
+		"tail -n +$((mark + 1)) ~/r9500.log | grep 'probe from' | grep ' 7 bytes'" 2>/dev/null |
 		addr - | grep -v "^$myip:" | tail -1)
 	[ -n "$peer" ] && break
 	sleep 2
