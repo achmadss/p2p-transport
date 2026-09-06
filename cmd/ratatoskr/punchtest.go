@@ -155,6 +155,9 @@ func punchtest() error {
 // measured on any other one belongs to that one, which is the mistake
 // that cost this project an evening.
 func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
+	if room := os.Getenv("RATATOSKR_PUNCH_ROOM"); room != "" {
+		return meetInRoom(c, room)
+	}
 	var mapped string
 	var keepalive *net.UDPAddr
 	for _, s := range stun.Servers() {
@@ -214,4 +217,51 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 		fmt.Println("  the other machine is aiming at the old one; start over.")
 	}
 	return peer, nil
+}
+
+// meetInRoom pairs the two machines through a rendezvous instead of an
+// operator.
+//
+// Carrying an address by hand is not only slow, it is a variable: a run
+// where the two sides started ninety seconds apart fails the same way as
+// a run where the path was shut, and several evenings were spent telling
+// those two apart. The server names this socket the way a reflector does
+// and hands back the other machine's address as soon as it joins, so
+// both sides begin within one poll of each other.
+func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
+	at := config.String("RATATOSKR_PUNCH_RENDEZVOUS", "103.181.143.222:9600")
+	server, err := net.ResolveUDPAddr("udp4", at)
+	if err != nil {
+		return nil, fmt.Errorf("rendezvous address %q: %w", at, err)
+	}
+	fmt.Printf("waiting in room %q at %s for the other machine.\n", room, server)
+
+	deadline := time.Now().Add(config.Duration("RATATOSKR_PUNCH_WAIT", 3*time.Minute))
+	buf := make([]byte, 256)
+	for time.Now().Before(deadline) {
+		if _, err := c.WriteToUDP([]byte(room), server); err != nil {
+			return nil, err
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		n, from, err := c.ReadFromUDP(buf)
+		if err != nil || !from.IP.Equal(server.IP) {
+			continue
+		}
+		parts := strings.Fields(string(buf[:n]))
+		if len(parts) != 2 {
+			continue
+		}
+		fmt.Printf("  MY PUNCH ADDRESS:  %s\n", parts[0])
+		if parts[1] == "-" {
+			continue
+		}
+		peer, err := net.ResolveUDPAddr("udp4", parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("rendezvous gave %q: %w", parts[1], err)
+		}
+		c.SetReadDeadline(time.Time{})
+		fmt.Printf("  PAIRED WITH:       %s\n\n", peer)
+		return peer, nil
+	}
+	return nil, fmt.Errorf("no other machine joined room %q; start it there too", room)
 }
