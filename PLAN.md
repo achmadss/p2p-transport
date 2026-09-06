@@ -14,7 +14,7 @@ device and your machine.
 
 | Name | What it is | Runs on | Language |
 |------|-----------|---------|----------|
-| **ratatoskr** | The agent. Owns the files. Also a client. | Windows, macOS, Linux | Go |
+| **ratatoskr** | The agent. Owns the files. Can also act as a client. | Windows, macOS, Linux | Go |
 | **heimdall** | Rendezvous. Introduces two peers that cannot see each other. Holds no data. | Linux VPS | Go |
 | **mimir** | Control plane. Accounts, device registry, presence, access grants. Has the database. | Linux VPS | Go |
 | **web app** | Browser file manager | anywhere | TypeScript |
@@ -24,6 +24,59 @@ Ratatoskr is the squirrel that carries messages up and down the world
 tree. Heimdall is the watchman at the bridge: he sees who is coming and
 lets them across, but never carries their luggage. Mimir is the well of
 knowledge: he remembers who you are and what is yours.
+
+### Words used precisely
+
+This document has a lot of nouns. They are not interchangeable.
+
+| Word | Means |
+|------|-------|
+| **account** | A person's login on mimir. Owns devices and clients. |
+| **device** | A machine that holds files. One agent runs on it. Identified by a peer id. |
+| **agent** | The `ratatoskr` process on a device. The side that **has** the files. |
+| **client** | One *installation* of something that **asks** a device for files. |
+| **peer** | Either end of a WebRTC connection. An agent is a peer; so is a client. |
+| **peer id** | `rt-…`, the hash of a public key. Names a device, or a client. |
+| **root** / **share** | A folder an agent offers, with a mode of `ro` or `rw`. |
+| **grant** | Mimir's signed note: this client may use these folders on this device, until this time. |
+| **ticket** | Mimir's signed note letting a client open a heimdall socket. |
+
+The line that matters:
+
+> **agent = the side that has the files. client = the side that asks.**
+
+### What a "client" is, exactly
+
+A client is **one installation**, not a person and not a machine.
+
+```
+your laptop, Chrome            client 1
+your laptop, Firefox           client 2      same laptop, same you
+your phone app                 client 3
+your phone app, reinstalled    client 4      client 3 is now dead
+`ratatoskr connect` from your laptop to your desktop   client 5
+```
+
+Each one generates its own keypair on first use and registers the public
+half with mimir. That is what makes it a client rather than just a
+session.
+
+Three consequences, and they are the reason it is a first-class thing:
+
+1. **Revocation is per install.** Losing a phone means killing client 3
+   without logging out of your desktop browser.
+2. **A stolen session cookie is not enough.** The private key cannot be
+   exported, so an attacker with your cookie still cannot prove they are
+   a registered client.
+3. **An agent can be a client too.** `ratatoskr connect` makes your
+   laptop a client of your desktop. It reuses its own `identity.key`
+   rather than making a new one, so it appears as both a device and a
+   client.
+
+Clearing browser data destroys that client's key. That is a re-pair, not
+a disaster — but it does mean web clients are disposable and mobile
+clients are long-lived. Expect the client list to accumulate dead web
+entries, and give the user a way to tidy them.
 
 ### The core rule, unchanged
 
@@ -124,11 +177,11 @@ can answer.
 
 Every frontend install also gets a keypair.
 
-| Client | Where the private key lives |
-|--------|----------------------------|
+| Kind of client | Where the private key lives |
+|----------------|----------------------------|
 | Web | WebCrypto Ed25519, **non-extractable**, stored in IndexedDB |
 | Mobile | Keychain (iOS) / Keystore (Android), hardware backed |
-| Agent as client | the same `identity.key` as 4.1 |
+| An agent acting as a client | the same `identity.key` as 4.1 — it does not make a second one |
 
 Non-extractable means JavaScript can ask the browser to sign with the
 key but can never read the key itself. A stolen session token is then
@@ -222,7 +275,8 @@ A normal HTTP service with a database. This is the only stateful piece.
 ```
 accounts        id, email, auth
 devices         id (peer id), account, public key, name, os, created, last_seen
-clients         id, account, public key, kind (web|ios|android), name, last_seen
+clients         id, account, public key, kind (web|ios|android|agent),
+                name, created, last_seen        one row per installation
 shares          device, path, mode (ro|rw)          what a device offers
 grants          issued grants, for revocation and audit
 ```
@@ -669,10 +723,10 @@ Worth naming so nobody builds a round trip for them:
 
 ```
 breadcrumbs and back navigation   cached listings
-sort, filter, search-in-view      client side, on data already fetched
-file type icons                   client side, from the name
-selection, rename-in-progress UI  client side
-recently opened                   client side, or mimir
+sort, filter, search-in-view      in the frontend, on data already fetched
+file type icons                   in the frontend, from the name
+selection, rename-in-progress UI  in the frontend
+recently opened                   in the frontend, or mimir
 ```
 
 ### 10.8 What this means for the product
@@ -1043,7 +1097,7 @@ Filestash is also AGPL-3.0, a real constraint for a hosted product.
 ### 21.2 What does work: a presentational component in the browser
 
 The WebRTC peer lives in the browser tab. So the file manager has to be a
-client-side component whose data layer we supply.
+component running in that tab, whose data layer we supply.
 
 | Library | Licence | Fit | Notes |
 |---------|---------|-----|-------|
