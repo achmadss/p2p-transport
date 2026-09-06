@@ -9,13 +9,13 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/stun"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -38,6 +38,21 @@ const EchoProto = protocol.ID("/ratatoskr/echo/1.0.0")
 // many arrived; sending them back would double the relay's bill and
 // halve the number. Deleted with EchoProto when the File API lands.
 const BenchProto = protocol.ID("/ratatoskr/bench/1.0.0")
+
+// ObservedProto asks the far end for the address it sees us at.
+//
+// A reflector on any other socket cannot answer this. A NAT that keeps
+// the mapping endpoint-independent but renumbers the port gives each
+// socket its own external port, so the port a throwaway STUN socket
+// learns is not the port libp2p punches from — which is exactly what a
+// phone hotspot does, and exactly why the punch was one-sided. Asked on
+// the connection itself, the answer is the QUIC socket's own address.
+//
+// One observer is enough here only because the mapping class is
+// established separately by `ratatoskr natcheck`: on an endpoint-
+// independent NAT the address heimdall sees is the address any peer may
+// use, and on any other kind no single address exists to be found.
+const ObservedProto = protocol.ID("/ratatoskr/observed/1.0.0")
 
 // Path is how a session reached the far end. It is measured from a live
 // connection, never guessed. PLAN.md §14.
@@ -140,67 +155,96 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
-	go findPublicAddr(h, &public)
-	go holdRelays(h, infos)
+	HandleObserved(h)
+	go holdRelays(h, infos, &public)
 	return &Host{h: h}, nil
 }
 
-// holdRelays dials every configured relay at startup.
+// holdRelays dials every configured relay at startup and asks each one
+// where it sees us.
 //
 // AutoRelay only reserves a slot once AutoNAT has decided this machine
 // is unreachable, and AutoNAT cannot decide anything without a peer to
 // ask. An idle agent has no peers, so it kept no reservation, reached no
 // verdict, and stayed unreachable from anywhere but its own LAN — a
 // drive nobody can dial is not a drive. Dialling the relay breaks the
-// circle: it is the peer AutoNAT needs and the host AutoRelay reserves
-// with.
+// circle: it is the peer AutoNAT needs, the host AutoRelay reserves
+// with, and the observer that names our public address.
 //
 // One attempt each, in the background, because a relay that is down is a
-// reason to run LAN-only rather than a reason not to start.
-func holdRelays(h host.Host, relays []peer.AddrInfo) {
+// reason to run LAN-only rather than a reason not to start. A machine
+// that changes network keeps the old address until it restarts.
+// ponytail: re-ask on EvtLocalAddressesUpdated when roaming matters.
+func holdRelays(h host.Host, relays []peer.AddrInfo, public *atomic.Value) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, r := range relays {
 		if err := h.Connect(ctx, r); err != nil {
 			fmt.Fprintf(os.Stderr, "relay %s unreachable: %v\n", r.ID, err)
+			continue
+		}
+		if a, ok := askObserved(ctx, h, r.ID); ok {
+			public.Store(a)
 		}
 	}
 }
 
-// findPublicAddr asks a reflector where we are and, if the answer can be
-// trusted, adds it to what this host advertises.
+// askObserved reads one relay's view of this machine's address.
 //
-// Only the QUIC address is claimed. STUN measured a UDP mapping and says
-// nothing about TCP, and an unsolicited inbound TCP handshake needs a
-// forwarded port rather than a punched one — so advertising a TCP
-// address here would be inventing a route. QUIC is the one that punches.
+// Failure is silent and total: without an answer the host advertises
+// only what it can see itself, which means LAN and the relay. That is a
+// worse drive, not a broken one, and it is honest — advertising a
+// guessed address costs every peer a dial that can never arrive.
+func askObserved(ctx context.Context, h host.Host, relay peer.ID) (multiaddr.Multiaddr, bool) {
+	s, err := h.NewStream(ctx, relay, ObservedProto)
+	if err != nil {
+		return nil, false
+	}
+	defer s.Close()
+	s.SetDeadline(time.Now().Add(10 * time.Second))
+	b, err := io.ReadAll(io.LimitReader(s, 256))
+	if err != nil {
+		return nil, false
+	}
+	return usableObserved(string(b))
+}
+
+// HandleObserved answers ObservedProto with the address this connection
+// came from. Heimdall serves it; every agent also does, so two peers on
+// one LAN can name each other without a relay in the room.
+func HandleObserved(h host.Host) {
+	h.SetStreamHandler(ObservedProto, func(s network.Stream) {
+		defer s.Close()
+		s.SetDeadline(time.Now().Add(10 * time.Second))
+		io.WriteString(s, s.Conn().RemoteMultiaddr().String())
+	})
+}
+
+// cgnat is carrier-grade NAT space: the ISP's own network, reachable
+// from inside it and from nowhere else.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// usableObserved accepts an observed address only if advertising it
+// would be a promise this machine can keep.
 //
-// It runs once, in the background, because a reflector may be slow or
-// absent and neither is a reason for the host not to start. A machine
-// that changes network keeps advertising the old address until restart.
-// ponytail: re-probe on EvtLocalAddressesUpdated when roaming matters.
-func findPublicAddr(h host.Host, public *atomic.Value) {
-	ip, ok := stun.PublicIP()
-	if !ok {
-		return
+// QUIC only, because the measurement is of a UDP mapping: an inbound TCP
+// handshake needs a forwarded port rather than a punched one, so a TCP
+// address here would be inventing a route. Public only, because an
+// address a third party cannot dial is worse than no address at all.
+func usableObserved(s string) (multiaddr.Multiaddr, bool) {
+	ma, err := multiaddr.NewMultiaddr(strings.TrimSpace(s))
+	if err != nil || transportOf(ma) != "quic" || pathOf(ma) != PathDirect {
+		return nil, false
 	}
-	for _, a := range h.Network().ListenAddresses() {
-		if _, err := a.ValueForProtocol(multiaddr.P_QUIC_V1); err != nil {
-			continue
-		}
-		port, err := a.ValueForProtocol(multiaddr.P_UDP)
-		if err != nil {
-			continue
-		}
-		if v, err := a.ValueForProtocol(multiaddr.P_IP4); err != nil || v == "" {
-			continue
-		}
-		ma, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%s/quic-v1", ip, port))
-		if err == nil {
-			public.Store(ma)
-		}
-		return
+	ip, err := manet.ToIP(ma)
+	if err != nil {
+		return nil, false
 	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok || cgnat.Contains(addr.Unmap()) {
+		return nil, false
+	}
+	return ma, true
 }
 
 // Host exposes the libp2p host to packages that need to attach to it,

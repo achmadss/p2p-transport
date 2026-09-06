@@ -77,6 +77,15 @@ And a
 circuit address does not appear in `host.Addrs()` on loopback, so `run`
 prints the peer id to copy rather than an address it cannot promise.
 
+A machine learns its own public address by asking a relay, over
+`/ratatoskr/observed/1.0.0`, and advertises it through an `AddrsFactory`.
+A STUN reflector cannot answer this: it names the socket that asked, and
+a NAT that renumbers ports gives libp2p's QUIC socket a different
+external port. `internal/stun` therefore serves `natcheck` and
+`punchtest` only — the mapping-class measurement, not address discovery.
+`scripts/punch.py` is the same punch test with no libp2p in it, and is
+the control every DCUtR failure needs beside it.
+
 Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands

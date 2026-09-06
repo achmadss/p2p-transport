@@ -15,6 +15,7 @@ import (
 
 	"github.com/achmadss/ratatoskr/internal/config"
 	"github.com/achmadss/ratatoskr/internal/identity"
+	"github.com/achmadss/ratatoskr/internal/transport"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -111,6 +112,13 @@ func run() error {
 	if _, err := relay.New(h, relay.WithResources(res)); err != nil {
 		return fmt.Errorf("start relay: %w", err)
 	}
+
+	// An agent behind a NAT that renumbers ports cannot learn its own
+	// external address from any socket but the one it punches with. This
+	// reports what that socket looks like from here, which is the one
+	// place it can be seen. Reading it costs one round trip and reveals
+	// nothing the relay did not already have to know.
+	transport.HandleObserved(h)
 
 	addrs, err := peer.AddrInfoToP2pAddrs(&peer.AddrInfo{ID: h.ID(), Addrs: h.Addrs()})
 	if err != nil {

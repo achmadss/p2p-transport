@@ -224,6 +224,28 @@ agreeing ones from distinct peers; with a single relay as the only
 direct peer it never reaches that bar, and the host punches from an
 address it has not told anyone about.
 
+**The first fix for that was also wrong, and the table above says why.**
+Asking a STUN reflector on a throwaway socket learns the external port
+*of that socket*. The home NAT preserves the port, so the guess happened
+to be right and `tcpdump` on the VPS confirmed it; the hotspot renumbers
+`60474` to `14650`, so on Windows the guess was refused and no address
+was advertised at all. Endpoint-independent means one external port for
+every *destination*, not one for every *socket*, and nothing about the
+punching socket can be learned from another one.
+
+`scripts/punch.py` settles the carriers. One socket asks STUN, then
+punches at the address the other operator carries over by hand, and both
+sides press enter together. Packets arrive in both directions at 15,
+1200 and 1280 bytes. These two carriers punch; the sizes are not a
+factor and never were.
+
+So heimdall answers `/ratatoskr/observed/1.0.0` with the remote address
+of the connection the question arrived on. That is the QUIC socket's own
+external address, measured rather than guessed, and it is exactly what
+the relay had to know already. One observer is enough only because
+`natcheck` establishes the mapping class separately: endpoint-independent
+means the address heimdall sees is the address any peer may use.
+
 Neither
 system in this class meets it and every one answers the same way, with
 a relay: Tailscale has DERP, Syncthing has relay pools. What it settles
