@@ -120,31 +120,34 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 
 ---
 
-## Step 6 — Control protocol and LIST
+## Step 6 — Control protocol, LIST and STAT
 
 - [ ] `PING` / `PONG` with round-trip time
 - [ ] `internal/fsroot`: clean, join, `EvalSymlinks`, verify inside root
+- [ ] `internal/fsroot`: the **write** variant — resolve the parent, then check
+      the final element has no separator
 - [ ] `internal/fsroot` tests: `..`, absolute paths, symlink escape, null
-      bytes, Windows reserved names, alternate data streams, `\\?\` prefixes
-- [ ] `LIST` / `LIST_RESULT`
+      bytes, Windows reserved names, alternate data streams, `\\?\` prefixes,
+      trailing dots and spaces
+- [ ] Shared roots carry a mode: `ro` or `rw`
+- [ ] `LIST` / `LIST_RESULT`, paged
 - [ ] `STAT` / `STAT_RESULT`
 - [ ] `ERROR` codes; never leak a real path or a stack trace
 - [ ] Enforce the 64 KB control message cap
-- [ ] `ratatoskr connect PEER_ID ls PATH`
+- [ ] `ratatoskr connect ID ls PATH`
 
 **Check:** a real directory prints. Every hostile path in the table is refused.
 
 ---
 
-## Step 7 — Local control API
+## Step 7 — Agent control API
 
 - [ ] `internal/control`: HTTP server on `127.0.0.1`, random free port
 - [ ] Random token; write `control.json` at mode 0600
 - [ ] Bearer token check on every route
-- [ ] `GET /v1/status`, `/v1/peers`, `/v1/discover`
-- [ ] `GET|POST|DELETE /v1/folders` and `/v1/trusted`
-- [ ] `GET /v1/events` server-sent events
-- [ ] Rewire `status`, `peers`, `folders`, `trusted`, `discover` as HTTP clients
+- [ ] `GET /v1/status`, `/v1/peers`, `/v1/discover`, `/v1/events`
+- [ ] `GET|POST|DELETE /v1/folders` (with `--rw`) and `/v1/trusted`
+- [ ] Rewire every CLI subcommand as an HTTP client
 - [ ] Clear message when no agent is running
 - [ ] Verify the config dir path on all three OSes
 
@@ -152,16 +155,16 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 
 ---
 
-## Step 8 — Transfer a small file
+## Step 8 — Download a small file
 
-- [ ] `OPEN` / `OPEN_OK` with size and BLAKE3 hash
+- [ ] `READ` / `READ_OK` with size and BLAKE3 hash
 - [ ] One `xfer-<id>` DataChannel per transfer
 - [ ] Frame format: uint32 sequence + payload, 16 KB chunks
-- [ ] Empty frame means end of file, then close the channel
+- [ ] Empty frame means end of stream, then close the channel
 - [ ] `CANCEL` from either side; both ends clean up
 - [ ] Receiver verifies the hash and fails loudly on a mismatch
 - [ ] Cap concurrent transfers per peer at 4
-- [ ] `ratatoskr connect PEER_ID get PATH OUT` with a progress line
+- [ ] `ratatoskr connect ID get PATH OUT` with a progress line
 
 **Check:** a 10 MB file arrives and the hash matches.
 
@@ -170,7 +173,7 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 ## Step 9 — Backpressure and a large file
 
 - [ ] Sender: `SetBufferedAmountLowThreshold` 256 KB, pause above 1 MB
-- [ ] `CREDIT` message; receiver starts at 64 chunks, tops up at half spent
+- [ ] `CREDIT`; receiver starts at 64 chunks, tops up at half spent
 - [ ] Sender blocks when credits run out
 - [ ] Receiver writes straight to disk; never buffers the whole file
 - [ ] Handle a file that shrinks, grows or vanishes mid-transfer
@@ -178,52 +181,140 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 - [ ] Test: 10 GB over LAN, watch RSS on both sides
 - [ ] Test: 4 simultaneous transfers stay stable
 
-**Check:** 10 GB completes, memory flat on both sides. **Milestone.**
+**Check:** 10 GB completes, memory flat on both sides. **Transport milestone.**
 
 ---
 
-## Step 10 — Real NAT
+## Step 10 — mimir, the control plane
 
-- [ ] Deploy heimdall to a VPS behind TLS (`wss://`)
-- [ ] Configure public STUN servers
-- [ ] Enable IPv6 and confirm it is actually tried
-- [ ] Report `direct` vs `relay` in `status`, from the real candidate pair
+- [ ] `cmd/mimir`: HTTP service, database, sessions
+- [ ] Schema: accounts, devices, clients, shares, grants
+- [ ] Mimir signing keypair; publish its public key
+- [ ] `internal/grant`: issue and verify, shared by mimir and the agent
+- [ ] Pairing: agent shows a short-lived single-use code; `POST /v1/pair`
+      redeems it; agent pins mimir's public key
+- [ ] `ratatoskr pair CODE`
+- [ ] `GET /v1/devices` — requirement 1
+- [ ] `GET /v1/devices/{id}` — requirement 2
+- [ ] `POST /v1/devices/{id}/session` — signal ticket, grant, ICE servers
+- [ ] `GET|DELETE /v1/clients` — revoke a client
+- [ ] Heimdall accepts a mimir ticket as a `register`
+- [ ] Heimdall pushes presence to mimir; full reconcile every 30 s
+- [ ] `network_hint` from comparing public IPs — label it a hint, not a fact
+- [ ] Agent verifies grants: signature, device id, expiry, account, client key
+- [ ] Agent caches the last grant so a LAN connection survives a mimir outage
+- [ ] Tests: expired grant, wrong device, forged signature, revoked client
+
+**Check:** `GET /v1/devices` lists a paired machine with correct presence, and
+the agent accepts a real grant while refusing every forged one.
+
+---
+
+## Step 11 — Web app
+
+- [ ] Client identity: WebCrypto Ed25519, **non-extractable**, in IndexedDB
+- [ ] Login, then device list and per-device status (requirements 1 and 2)
+- [ ] Browser WebRTC peer: heimdall via ticket, ctrl channel, HELLO + AUTH
+- [ ] `web/src/fs-adapter.ts` — our verbs only. Nothing else touches the
+      file-manager library
+- [ ] Mount `@cubone/react-file-manager` on the adapter
+- [ ] Service worker streaming download sink
+- [ ] File System Access API sink where available; feature-detect
+- [ ] Blob fallback for small files only
+- [ ] Progress, cancel, and browser-side backpressure
+- [ ] Status UI: Online / Local network / Direct / Relayed / Offline
+- [ ] Re-pair flow when the browser key is gone — one click
+- [ ] Test the streaming sink on Chrome, Firefox and Safari
+
+**Check:** log in, see the machines, open one, browse it, download a 5 GB file.
+**First usable release.**
+
+---
+
+## Step 12 — Real NAT
+
+- [ ] Deploy heimdall and mimir to a VPS behind TLS
+- [ ] Public STUN configured
+- [ ] IPv6 enabled and confirmed to be tried
+- [ ] Report the measured path per session, from the real candidate pair
 - [ ] Test: home Wi-Fi to phone hotspot
 - [ ] Test: macOS↔Windows, macOS↔Linux, Windows↔Linux
 - [ ] Test: both peers behind the same NAT
-- [ ] Log connection type per session so the relay rate can be counted
+- [ ] Log connection type per session so the relay share can be counted
 
 **Check:** a direct connection forms across the Internet, proven by the log.
 
 ---
 
-## Step 11 — TURN fallback
+## Step 13 — TURN fallback
 
-- [ ] Install coturn on the VPS, `use-auth-secret` mode
-- [ ] heimdall mints short-lived TURN credentials per session
-- [ ] Listen on UDP, TCP, and TLS on 443
+- [ ] coturn on the VPS, `use-auth-secret` mode
+- [ ] mimir mints short-lived TURN credentials per session
+- [ ] Listen on UDP, TCP and TLS 443
 - [ ] `--force-relay` test flag
 - [ ] Test: 1 GB transfer with STUN disabled
-- [ ] Rate limit relay use per peer
+- [ ] Rate limit relay use per account
 
 **Check:** a 1 GB file transfers over the relay only.
 
 ---
 
-## Step 12 — Survival
+## Step 14 — Write operations
 
-- [ ] Sleep and wake the serving machine
+The first step that can destroy data. Section 10 of `PLAN.md` is the spec.
+
+- [ ] `ro` roots refuse every write before any path work happens
+- [ ] A grant may narrow a root's mode, never widen it
+- [ ] `internal/fsops`: atomic write — temp file in the destination dir,
+      fsync file, fsync dir, rename over the target
+- [ ] Clean up stale temp files on startup
+- [ ] `WRITE` / `WRITE_OK`: upload reusing the xfer channel and credit window
+- [ ] Free-space check and size cap before an upload starts
+- [ ] `MKDIR` — no `-p` by default; refuse if the parent is missing
+- [ ] `MOVE` — validate source and destination separately; both must be `rw`;
+      no overwrite without `overwrite: true`; cross-filesystem becomes
+      copy-then-delete with a hash check
+- [ ] `COPY` — server-side, same destination rules
+- [ ] `DELETE` — never recursive without `recursive: true`; never follow a
+      symlink out of the root; refuse to delete a share root
+- [ ] Wire all of it through `fs-adapter.ts` into the web UI
+- [ ] `ratatoskr connect ID put|mkdir|mv|rm`
+- [ ] Destructive-action tests: kill mid-upload, disk full, permission denied,
+      target vanished, symlinked destination, path traversal on every verb
+
+**Check:** the whole of requirement 3. No half-written file survives a kill.
+
+---
+
+## Step 15 — Survival
+
+- [ ] Sleep and wake the agent machine
 - [ ] Switch Wi-Fi to hotspot mid-connection; ICE restart
 - [ ] Move between LAN and Internet; discovery re-picks the right path
 - [ ] Restart the agent; re-register the same peer id
-- [ ] Restart heimdall; both agents reconnect
-- [ ] heimdall unreachable; agent retries with backoff, LAN still works
+- [ ] Restart heimdall; everything reconnects
+- [ ] mimir down: existing grants still work on the LAN; UI says so
 - [ ] Cancel a transfer at 50%; both sides clean up
-- [ ] Kill the client mid-transfer; the server frees the file handle
+- [ ] Kill the client mid-transfer; the agent frees the file handle
 - [ ] Every failure path ends in a working connection or an honest error.
       Never a hang.
 
 **Check:** the whole list, on all three machines.
+
+---
+
+## Step 16 — Mobile app
+
+- [ ] Client identity in Keychain / Keystore
+- [ ] WebRTC peer, same protocol
+- [ ] LAN discovery — mobile **can** do this, unlike the web
+- [ ] iOS: local network permission + multicast entitlement
+- [ ] Android: NSD
+- [ ] File manager UI, built rather than adopted
+- [ ] Background transfer behaviour on both platforms
+
+**Check:** browse and transfer over the LAN with the phone in aeroplane mode
+apart from Wi-Fi.
 
 ---
 
@@ -236,10 +327,10 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 - [ ] Structured logging with levels; `--verbose` for ICE and discovery detail
 - [ ] Unit tests beside each package. `internal/identity`, `internal/fsroot`
       and `internal/protocol` are the ones that must be thorough
-- [ ] `README.md` once step 8 passes
+- [ ] `README.md` once step 9 passes
 
 ## Deliberately not now
 
-Web client · UI wrapper · account dashboard and claim tokens · installers ·
-autostart · file index · uploads, deletes, renames · mobile ·
-browser on an offline LAN
+`ratatoskr mount` (local WebDAV bridge) · desktop UI wrapper · installers and
+autostart · file index and search · version history · sync · sharing between
+accounts · public links · thumbnails · browser on a LAN with no Internet

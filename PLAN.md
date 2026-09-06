@@ -1,4 +1,4 @@
-# Ratatoskr — P2P Backbone Plan
+# Ratatoskr — Plan
 
 Module path: `github.com/achmadss/ratatoskr`
 
@@ -6,695 +6,911 @@ Module path: `github.com/achmadss/ratatoskr`
 
 ## 1. What this is
 
-Two Go programs that let one machine reach files on another machine, on
-the same network or across the Internet, with the file bytes travelling
-directly between the two.
+A personal file system that stays on your own machines, reachable from a
+web or mobile app, where the file bytes travel directly between your
+device and your machine.
 
-| Name | Role | Runs on |
-|------|------|---------|
-| **ratatoskr** | The agent. Owns the files. Also acts as a client. | Windows, macOS, Linux |
-| **heimdall** | The rendezvous server. Introduces two agents that cannot see each other. | A small Linux VPS |
+### The pieces
+
+| Name | What it is | Runs on | Language |
+|------|-----------|---------|----------|
+| **ratatoskr** | The agent. Owns the files. Also a client. | Windows, macOS, Linux | Go |
+| **heimdall** | Rendezvous. Introduces two peers that cannot see each other. Holds no data. | Linux VPS | Go |
+| **mimir** | Control plane. Accounts, device registry, presence, access grants. Has the database. | Linux VPS | Go |
+| **web app** | Browser file manager | anywhere | TypeScript |
+| **mobile app** | iOS and Android file manager | phones | later |
 
 Ratatoskr is the squirrel that carries messages up and down the world
 tree. Heimdall is the watchman at the bridge: he sees who is coming and
-lets them across, but he never carries their luggage.
+lets them across, but never carries their luggage. Mimir is the well of
+knowledge: he remembers who you are and what is yours.
 
-### The core rule
+### The core rule, unchanged
 
-> Heimdall coordinates the connection. Ratatoskr carries the files.
+> Mimir remembers. Heimdall introduces. Ratatoskr carries the files.
 
-File bytes never pass through the server on the normal path. That is what
-keeps hosting cheap and what makes the design worth building.
-
-### Out of scope for now
-
-No web client. No UI. No installer. No account dashboard. No file index.
-No uploads, deletes or renames. Read-only, command line only.
+File bytes never pass through any server on the normal path. That is what
+keeps hosting cheap and what makes the whole design worth building.
 
 ---
 
-## 2. Two ideas that must stay separate
+## 2. Who talks to whom
 
-This is the most important paragraph in the document.
+```
+                    ┌──────────────────────────────────────┐
+                    │             mimir                    │
+   login,           │  accounts · devices · presence       │
+   device list,     │  access grants · signal tickets      │
+   status           │  (the only thing with a database)    │
+        ┌──────────►│                                      │
+        │           └───────────────┬──────────────────────┘
+        │                           │ presence feed
+        │                           │ grant public key
+        │           ┌───────────────▼──────────────────────┐
+        │           │            heimdall                  │
+        │  ticket   │  WebSocket rendezvous · no database   │
+        │  ┌───────►│  relays SDP and ICE, nothing else     │
+        │  │        └───────────────┬──────────────────────┘
+        │  │                        │
+┌───────┴──┴────┐                   │            ┌──────────────┐
+│  web app      │                   └───────────►│  ratatoskr   │
+│  mobile app   │                                │  agent       │
+└───────┬───────┘                                └──────┬───────┘
+        │                                               │
+        │═══════════ WebRTC : DTLS + SCTP ══════════════│
+        │   ctrl    JSON requests and replies           │
+        │   xfer-N  binary chunks, one per transfer     │
+        └───────────────────────────────────────────────┘
+```
 
-**Discovery** is how peer A learns where peer B is and swaps connection
-notes with it.
+Three facts to hold on to:
+
+1. The frontend only ever asks **mimir** questions. It never talks to
+   heimdall except to open one WebSocket with a ticket mimir gave it.
+2. Neither mimir nor heimdall can read your files. Neither holds a key
+   that would let them. Section 4 is how that is enforced.
+3. The heavy line at the bottom is the only path file bytes take.
+
+---
+
+## 3. Two ideas that must stay separate
+
+The most important paragraph in this document.
+
+**Discovery** is how a client learns where an agent is and swaps
+connection notes with it.
 
 **The data path** is where the file bytes actually travel.
 
-They are decided by different machinery, and confusing them leads to bad
-design. In particular:
+> Being on the same LAN already gives a direct LAN data path, even when
+> discovery went through a server on the Internet.
 
-> Being on the same LAN already gives you a direct LAN data path, even
-> when discovery went through a server on the Internet.
+ICE always prefers host candidates. A phone and an agent on one Wi-Fi
+that signalled through heimdall still connect over the Wi-Fi, at LAN
+speed, with the bytes never leaving the building. Step 0 already proved
+this: the winning pair was `host <-> host`.
 
-ICE always prefers host candidates. Two peers on one LAN that signalled
-through heimdall will still connect over the LAN, at LAN speed, with the
-bytes never leaving the building. Step 0 already proved this: the winning
-pair was `host <-> host`.
-
-So LAN discovery is **not** what gives you LAN speed. ICE does that on
-its own. LAN discovery gives you two other things, both worth having:
-
-1. **Independence.** The connection works with the Internet unplugged,
-   or with heimdall down, or with your VM's bill unpaid.
-2. **Privacy.** Nothing at all leaves the network. Not the file bytes,
-   which were never going to, but also not the fact that two of your
-   machines just talked to each other.
-
-Those are good enough reasons to make LAN the default path. See 4.5.
-It is still built after heimdall, because heimdall is the path that
-always works and the harder one to get right.
+So LAN discovery is not what buys LAN speed. It buys two other things:
+working with the Internet down, and not telling a server that two of your
+own machines just talked. Both are worth having. See section 7.
 
 ---
 
-## 3. Device identity
+## 4. Identity and authorisation
 
-Every agent has a permanent identity, created on first run. This is the
-Tailscale model.
+Three kinds of key. Nothing on a server is one of them.
 
-### 3.1 Not a hardware fingerprint
-
-An identity derived from hardware (MAC address, disk serial, machine
-UUID) breaks in ways that are painful and hard to debug: virtual
-machines clone it, network adapters change, macOS randomises MAC
-addresses, a disk swap loses it. It is also a privacy problem, because
-the identity then leaks facts about the machine.
-
-Tailscale does not do this either. A node's identity is a keypair.
-
-### 3.2 A keypair instead
+### 4.1 Agent identity
 
 On first run the agent generates an **Ed25519 keypair**.
 
 ```
 private key  ->  config dir, mode 0600, never leaves the machine
-public key   ->  the identity
-peer id      ->  base32(sha256(public key)[:16]), lowercase, no padding
+peer id      ->  "rt-" + base32(sha256(pubkey)[:16]), lowercase, no padding
 ```
 
-That gives a 26 character id, printed in groups for readability:
+Printed in groups: `rt-k4m2 q9xw 7bnp 3vdh 5tzy 6rfc ag`
+
+**Not a hardware fingerprint.** MAC addresses, disk serials and machine
+UUIDs break when a VM is cloned, a disk is swapped, or macOS randomises
+the MAC — and they leak facts about the machine. Tailscale does not use
+them either. A node is a keypair.
+
+Because the id is a hash of the public key, the id proves itself. Anyone
+claiming it can be challenged to sign a nonce, and only the real holder
+can answer.
+
+### 4.2 Client identity
+
+Every frontend install also gets a keypair.
+
+| Client | Where the private key lives |
+|--------|----------------------------|
+| Web | WebCrypto Ed25519, **non-extractable**, stored in IndexedDB |
+| Mobile | Keychain (iOS) / Keystore (Android), hardware backed |
+| Agent as client | the same `identity.key` as 4.1 |
+
+Non-extractable means JavaScript can ask the browser to sign with the
+key but can never read the key itself. A stolen session token is then
+not enough to impersonate the device.
+
+Clearing browser data destroys the key. That is a re-pair, not a
+disaster. Treat a web client as disposable and a mobile client as
+long-lived.
+
+### 4.3 Access grants — how the agent decides who may in
+
+The agent must not have to phone home to authorise a request. So mimir
+signs a short document and the client carries it.
+
+Mimir has its own signing keypair. When the agent is paired to an
+account, it pins **mimir's public key**.
+
+```json
+{
+  "v": 1,
+  "account": "acc_7f3a",
+  "device":  "rt-k4m2q9xw7bnp3vdh5tzy6rfcag",
+  "client":  "<client public key>",
+  "scopes":  { "/Documents": "rw", "/Videos": "ro" },
+  "issued":  "2026-09-06T10:00:00Z",
+  "expires": "2026-09-06T11:00:00Z",
+  "sig":     "<mimir's signature over the above>"
+}
+```
+
+The agent checks, in this order:
+
+1. The signature verifies against mimir's pinned public key
+2. `device` is this agent's own peer id
+3. `expires` has not passed, allowing small clock skew
+4. `account` matches the account this agent is paired to
+5. The peer that just authenticated on the control channel holds the
+   private key for `client`
+
+Any failure closes the connection. Fail closed, always.
+
+**Why this shape.** Mimir cannot read files: it holds no agent key and
+no client key, and it is not on the data path. Heimdall cannot either,
+and it never even sees a grant. A stolen grant expires in an hour and is
+useless without the client's private key, which cannot be exported.
+
+**Offline.** A grant is cached and reused until it expires. So a phone
+that was online an hour ago still works on a LAN with the Internet down.
+Grants for the mobile app can be issued with a longer life for exactly
+this reason. A fully offline first connection is not possible, and that
+is the honest limit of the model.
+
+### 4.4 Mutual authentication on the wire
+
+Right after the control channel opens, before anything else:
 
 ```
-rt-k4m2 q9xw 7bnp 3vdh 5tzy 6rfc ag
+A -> B   HELLO  { peer_id, public_key, nonce, version }
+B -> A   HELLO  { peer_id, public_key, nonce, version }
+A -> B   AUTH   { sig over "ratatoskr-auth-v1" || peer nonce || DTLS fingerprint,
+                  grant: {...} }
+B -> A   AUTH   { sig ... }
 ```
 
-### 3.3 Why this shape is worth it
+The DTLS fingerprint is inside the signed material, so a captured proof
+cannot be replayed onto a different connection.
 
-The peer id is a **hash of a public key**. That single fact buys three
-things:
+### 4.5 The local trust list
 
-1. **The id is self-authenticating.** Anyone claiming to be
-   `rt-k4m2...` can be challenged to sign a nonce. Only the holder of
-   the private key can answer. An impostor cannot fake it.
-2. **Heimdall does not have to be trusted.** It cannot impersonate an
-   agent, and it cannot man-in-the-middle a connection, because it does
-   not hold any private key. The worst it can do is refuse to introduce
-   two peers.
-3. **The same proof works on the LAN and over the Internet.** One auth
-   mechanism, not two.
-
-### 3.4 Mutual authentication
-
-Right after the control channel opens, both sides prove who they are.
+The agent also keeps a hand-managed allow list, independent of mimir.
+This is the development and self-hosting path, and it is what makes step
+2 testable long before mimir exists.
 
 ```
-A -> B   HELLO   { peer_id, public_key, nonce_a, version }
-B -> A   HELLO   { peer_id, public_key, nonce_b, version }
-A -> B   AUTH    { signature over ("ratatoskr-auth-v1" || nonce_b || dtls_fingerprint) }
-B -> A   AUTH    { signature over ("ratatoskr-auth-v1" || nonce_a || dtls_fingerprint) }
-```
-
-Each side checks that:
-
-- `sha256(public_key)` really produces the claimed `peer_id`
-- the signature verifies against that public key
-- the peer id is in this machine's allow list
-
-The DTLS fingerprint is included in the signed material so the proof is
-bound to this specific WebRTC connection and cannot be replayed onto
-another one.
-
-Anything that fails, closes the connection. Fail closed, always.
-
-### 3.5 The allow list
-
-Each agent keeps a list of peer ids it will accept, in its config. For
-now these are added by hand:
-
-```
-ratatoskr trust rt-k4m2q9xw7bnp3vdh5tzy6rfcag  --name "my laptop"
-ratatoskr untrust rt-k4m2q9xw7bnp3vdh5tzy6rfcag
+ratatoskr trust rt-...  --name "my laptop"
+ratatoskr untrust rt-...
 ratatoskr trusted
 ```
 
-Later, an account dashboard hands out this list instead. The wire format
-does not change when that happens, which is the point of doing it this
-way now.
+An agent accepts a peer if **either** the local list allows it or a valid
+grant covers it.
 
 ---
 
-## 4. Discovery
+## 5. Mimir — the control plane
 
-Given a peer id, find a way to swap SDP with it. Two methods. **The LAN
-is the default. Heimdall is the fallback.**
+A normal HTTP service with a database. This is the only stateful piece.
+
+### 5.1 What it stores
 
 ```
-ratatoskr connect rt-k4m2...
-        |
-        +-- t=0     mDNS query for the peer id        no Internet needed
-        |
-        |           if it answers in time:
-        |              -> use it, and never contact heimdall at all
-        |
-        +-- t=400ms heimdall rendezvous               starts only if the
-        |                                             LAN has not answered
-        v
-   first working session wins; the loser is cancelled
+accounts        id, email, auth
+devices         id (peer id), account, public key, name, os, created, last_seen
+clients         id, account, public key, kind (web|ios|android), name, last_seen
+shares          device, path, mode (ro|rw)          what a device offers
+grants          issued grants, for revocation and audit
 ```
 
-### 4.0 Why a head start and not a strict sequence
+### 5.2 API for the frontend
 
-A strict sequence — try LAN, wait for it to fail, then try heimdall —
-makes every remote connection pay the full mDNS timeout before it even
-begins. That is the wrong tax, because remote is the common case.
+All routes need a logged-in session.
 
-A plain race, with both starting at t=0, has the opposite problem: it
-sends a packet to heimdall even when the peer is sitting on the same
-switch. That breaks the independence and privacy points above.
+```
+POST /v1/auth/...                 login, whatever you already use
 
-The **head start** gets both. mDNS starts immediately. Heimdall is held
-for 400 ms. On a LAN, mDNS answers in 50-200 ms, so heimdall is never
-contacted. Off a LAN, the cost is 400 ms once, at connect time.
+GET  /v1/devices                  requirement 1: list my machines
+GET  /v1/devices/{id}             requirement 2: one machine's status
+POST /v1/devices/{id}/session     get a signal ticket + a grant
+DELETE /v1/devices/{id}           unpair
 
-Fallback is triggered by either of two things, not just one:
+POST /v1/pair                     redeem a pairing code from an agent
+GET  /v1/clients                  this account's registered clients
+DELETE /v1/clients/{id}           revoke a client
+```
 
-- the mDNS query times out, **or**
-- the peer is found on the LAN but the handshake with it fails
+`GET /v1/devices` returns:
 
-The second case matters. A local firewall can block the signal port
-while multicast still works. Finding the peer is not the same as
-reaching it.
+```json
+[{
+  "id": "rt-k4m2q9xw7bnp3vdh5tzy6rfcag",
+  "name": "Work Laptop",
+  "os": "darwin",
+  "presence": "online",
+  "last_seen": "2026-09-06T10:59:12Z",
+  "shares": [ {"path": "/Documents", "mode": "rw"} ],
+  "network_hint": "same_network"
+}]
+```
 
-### 4.1 LAN discovery — mDNS
+`POST /v1/devices/{id}/session` returns:
 
-Each running agent advertises itself on the local network:
+```json
+{
+  "signal_url": "wss://heimdall.example.com/v1/ws",
+  "ticket": "<short-lived, signed, names this client and this device>",
+  "grant": { ... },
+  "ice_servers": [ {"urls": ["stun:..."]},
+                   {"urls": ["turn:..."], "username": "...", "credential": "..."} ]
+}
+```
+
+TURN credentials are minted here, per session, short-lived. A static TURN
+password in a shipped app gets scraped and turns your relay into a free
+one for the Internet.
+
+### 5.3 Presence
+
+Heimdall knows who is connected, because it holds the sockets. Mimir
+needs that fact but must not hold the sockets itself.
+
+Heimdall pushes presence changes to mimir on an internal endpoint:
+`connected`, `disconnected`, plus a full reconciliation sweep every 30
+seconds so a missed event self-heals. Mimir stores `presence` and
+`last_seen`.
+
+### 5.4 Deployment note
+
+Mimir and heimdall are separate services with separate concerns: mimir is
+a CRUD app with a database, heimdall is a connection holder with none.
+They may run on the same box, and probably should at first. Keep the code
+boundary clean anyway, because they scale on different things.
+
+---
+
+## 6. Status, honestly reported
+
+Requirement 2 asks whether a machine is reachable and by what method.
+Those are two different questions with two different answers, and mixing
+them produces a UI that lies.
+
+### 6.1 Before you connect — presence
+
+From mimir. Cheap, and the answer to "should I even show this as
+clickable".
+
+```
+online     the agent has a live socket to heimdall
+offline    it does not
+unknown    heimdall was unreachable, so we genuinely do not know
+```
+
+Plus one hint, and it is only a hint:
+
+```
+network_hint: same_network | different_network | unknown
+```
+
+Derived by comparing the public IP heimdall sees for the client with the
+one it sees for the agent. Same public IP usually means the same NAT,
+which usually means a LAN connection is available. It is a guess. Never
+present it as a fact.
+
+### 6.2 After you connect — the measured path
+
+Only a real connection can answer this, because it is decided by ICE at
+connect time.
+
+```
+lan       discovered by mDNS, host candidates only, nothing left the network
+direct    a direct path found via STUN, possibly still over the LAN
+relay     going through TURN; your server is paying for these bytes
+```
+
+This comes from the winning ICE candidate pair, never from a guess. It
+must be logged per session, because the relay share is the number that
+decides what this system costs to run.
+
+### 6.3 What the UI shows
+
+```
+Work Laptop        ● Online          (before connecting)
+Work Laptop        ● Online · Local network        (connected, lan or direct-host)
+Work Laptop        ● Online · Direct               (connected, direct)
+Work Laptop        ● Online · Relayed — slower     (connected, relay)
+Work Laptop        ○ Offline
+```
+
+Never show the words ICE, STUN, TURN, SDP or candidate outside a
+diagnostics screen.
+
+---
+
+## 7. Discovery
+
+Given a device id, find a way to swap SDP with it.
+
+### 7.1 What each client can actually do
+
+| Client | LAN discovery | Notes |
+|--------|--------------|-------|
+| Agent | yes | mDNS, no restrictions |
+| Mobile | yes | iOS needs the local network permission and the multicast entitlement; Android uses NSD |
+| Web | **no** | No browser API exists for this, and a page on HTTPS cannot call `http://192.168.x.x`. Heimdall always |
+
+So the web app always signals through heimdall — and, per section 3, it
+still gets a LAN-speed data path when it is on the same network. Only a
+few kilobytes go out.
+
+### 7.2 LAN first, with a head start
+
+For clients that can do mDNS:
+
+```
+connect rt-k4m2...
+  |
+  +-- t=0      mDNS query for the device id           no Internet needed
+  |            answers in 50-200 ms -> use it, and never contact heimdall
+  |
+  +-- t=400ms  heimdall rendezvous                    only if the LAN is quiet
+```
+
+A strict sequence would make every remote connection wait out the full
+mDNS timeout first — the wrong tax on the common case. A plain race would
+send a packet to heimdall even for the laptop on the same switch. The
+head start avoids both.
+
+Fall back to heimdall on either trigger: mDNS timed out, **or** the peer
+was found on the LAN but the handshake with it failed. A local firewall
+can block the signal port while multicast still works. Finding is not
+reaching.
+
+### 7.3 mDNS details
 
 ```
 service : _ratatoskr._udp.local
 TXT     : id=<peer id>  pk=<base64 public key>  sp=<local signal port>  v=1
 ```
 
-A peer looking for `rt-k4m2...` browses the service and matches on the
-`id` field.
-
-Once found, it has an IP and a port. It posts an offer straight to the
-other agent's **local signal endpoint**:
+Once found, the client posts an offer straight to the agent:
 
 ```
-POST http://<lan-ip>:<sp>/v1/signal     body: the SDP offer
-response:                               the SDP answer
+POST http://<lan-ip>:<sp>/v1/signal    body: SDP offer
+response:                              SDP answer
 ```
 
-No Internet involved. No server involved.
+The endpoint does exactly one thing and grants nothing. All real
+authentication happens inside the encrypted WebRTC channel, per 4.4. Rate
+limit it hard and cap concurrent handshakes.
 
-Notes:
+UDP 5353 means a firewall prompt on macOS and Windows at first run.
+Expect two prompts, this one and the signal port.
 
-- This endpoint listens on the LAN, so it is the one piece of attack
-  surface exposed to the local network. It must do nothing except
-  accept an offer and return an answer. All real authentication still
-  happens inside the encrypted WebRTC channel, per 3.4. A stranger on
-  your café Wi-Fi can make the agent burn a few CPU cycles on a
-  handshake and nothing more.
-- Rate limit it hard, and cap concurrent handshakes.
-- mDNS uses UDP 5353. macOS and Windows will show a firewall prompt on
-  first run. Expect it.
-- Many corporate and guest networks block multicast between clients.
-  When that happens, discovery falls through to heimdall, which is
-  exactly the intended behaviour.
+### 7.4 A LAN session must stay on the LAN
 
-### 4.2 Internet discovery — heimdall
+Choosing the LAN is not enough by itself. ICE would still query the
+configured STUN servers, so packets would leave the network anyway.
 
-A WebSocket rendezvous server. See section 7.
+A session discovered on the LAN is built with **host candidates only**:
+empty ICE server list, no STUN, no TURN.
 
-### 4.3 Why keep WebRTC even on the LAN
+```
+found on the LAN   ->  ICE servers: none          nothing leaves the network
+found via heimdall ->  ICE servers: STUN + TURN   normal path
+```
 
-Once mDNS has found the peer, there is already a working HTTP connection
-to it. It is tempting to just stream the file over that.
+This turns "works with the Internet unplugged" into something testable
+rather than something that happens to work.
 
-Do not. That would mean two complete file transfer implementations to
-write, test, and keep in sync — chunking, backpressure, cancellation,
-hashing, resume — for no gain, because ICE over the LAN already picks
-host candidates and runs at wire speed.
+### 7.5 Keep one data path
+
+After mDNS there is already a working HTTP connection to the agent, and
+it is tempting to stream files over it. Do not. That means two complete
+transfer implementations — chunking, backpressure, cancel, hashing,
+resume — to write and keep in sync, for no gain, because ICE over the LAN
+already runs at wire speed.
 
 **One data path. Always WebRTC.** mDNS and heimdall are two doors into
 the same room.
 
-### 4.5 A LAN session must stay on the LAN
-
-Discovery choosing the LAN is not enough on its own. ICE would still
-query the configured STUN servers, so packets would leave the network
-even though the connection is local. That quietly undoes the whole
-point.
-
-So a session that was discovered on the LAN is built with **host
-candidates only**: no STUN, no TURN, empty ICE server list.
-
-```
-discovered via LAN  ->  ICE servers: none          nothing leaves the network
-discovered via net  ->  ICE servers: STUN, + TURN  normal path
-```
-
-This makes "it works with the Internet unplugged" a guarantee that can
-be tested, rather than something that happens to work most of the time.
-
-If a host-only session fails to connect, fall back to heimdall like any
-other failure.
-
-### 4.6 Where this leaves a browser
-
-A browser cannot do mDNS. There is no web API for discovering devices on
-the local network, and there will not be one. A page served over HTTPS
-also cannot call a plain `http://192.168.x.x` endpoint, because that is
-blocked as mixed content.
-
-So a browser client always uses heimdall for discovery. The LAN-default
-rule in this section applies to agent-to-agent connections only.
-
-**This costs almost nothing**, because of section 2: a browser on the
-same LAN as the agent still gets a direct LAN data path via ICE. Only
-the few kilobytes of signalling go out to the Internet.
-
-The one case that genuinely does not work is a browser on a LAN with no
-Internet at all. Solving that means the agent serving real HTTPS on a LAN
-address, which needs a public wildcard certificate and DNS pointing at
-private IPs. Plex does this. It is a project of its own. It is out of
-scope, and it is noted here so nobody rediscovers it as a surprise.
-
 ---
 
-## 5. Shape
+## 8. Heimdall — rendezvous
+
+One WebSocket endpoint. It relays opaque blobs and understands almost
+nothing.
 
 ```
-ratatoskr A                    heimdall                    ratatoskr B
-(client)                    (WebSocket)                    (serving files)
-    |                             |                             |
-    |--- register + proof ------->|<-------- register + proof ---|
-    |--- offer  (for B) --------->|---------- offer ----------->|
-    |<-- answer ------------------|<--------- answer -----------|
-    |<-> ice candidates <-------->|<------> ice candidates <---->|
-    |                             |                             |
-    |============ WebRTC : DTLS + SCTP DataChannels =============|
-    |   "ctrl"    JSON requests and replies, reliable + ordered  |
-    |   "xfer-N"  binary chunks, one channel per active download |
-
-
-on the same LAN, heimdall is skipped entirely:
-
-ratatoskr A  --- mDNS query ------>  (multicast)
-             <-- TXT: id, pk, port --  ratatoskr B
-             --- POST /v1/signal ---->
-             <-- SDP answer ----------
-             ============ WebRTC ============
-```
-
-Heimdall holds one piece of state: which peer id is on which socket. It
-sees no file names, no file contents, no directory listings.
-
----
-
-## 6. Transport
-
-WebRTC DataChannels, via [Pion](https://github.com/pion/webrtc) on both
-ends. Pion is pure Go.
-
-ICE order of preference:
-
-1. Host candidates — same LAN, fastest
-2. Server-reflexive via STUN — the normal Internet case
-3. Relay via TURN — only when the network blocks everything else
-
-The agent must log which candidate pair actually won, so "direct" versus
-"relay" is a measured fact and not a guess.
-
----
-
-## 7. Signaling protocol — heimdall
-
-One WebSocket endpoint. JSON messages. The server relays opaque blobs and
-understands almost nothing.
-
-```
-client -> server   { "type": "register", "peer_id": "...", "public_key": "...",
-                     "nonce": "...", "signature": "..." }
+client -> server   { "type": "register", "ticket": "..." }        frontends
+client -> server   { "type": "register", "peer_id": "...",        agents
+                     "public_key": "...", "nonce": "...", "signature": "..." }
 server -> client   { "type": "registered" }
 
-client -> server   { "type": "offer",  "to": "<peer>", "sdp": "..." }
-server -> peer     { "type": "offer",  "from": "<peer>", "sdp": "..." }
+client -> server   { "type": "offer"|"answer"|"ice", "to": "<peer>", ... }
+server -> peer     { "type": "offer"|"answer"|"ice", "from": "<peer>", ... }
 
-client -> server   { "type": "answer", "to": "<peer>", "sdp": "..." }
-server -> peer     { "type": "answer", "from": "<peer>", "sdp": "..." }
-
-client -> server   { "type": "ice",    "to": "<peer>", "candidate": {...} }
-server -> peer     { "type": "ice",    "from": "<peer>", "candidate": {...} }
-
-server -> client   { "type": "peer_gone",  "peer": "<peer>" }
-server -> client   { "type": "not_found",  "peer": "<peer>" }
-server -> client   { "type": "error", "code": "...", "message": "..." }
+server -> client   { "type": "peer_gone" | "not_found" | "error", ... }
 ```
 
 Rules:
 
-- `register` must carry a signature over a server-issued nonce. Heimdall
-  verifies that `sha256(public_key)` equals the claimed `peer_id` and
-  that the signature checks out. This stops anyone from squatting on
-  another peer's id.
-- Ping/pong every 20 seconds. Drop a socket that misses two.
-- A `register` for a peer id that is already connected replaces the old
-  socket. This is what makes agent restart work.
-- Rate limit per socket and per IP. Signaling is cheap to abuse.
-- Heimdall does **not** decide who may talk to whom. That is the agent's
-  allow list, checked inside the encrypted channel. Heimdall being
-  compromised must not grant anyone file access.
-- Later, heimdall also mints short-lived TURN credentials. Never ship a
-  static TURN password.
+- An agent registers by signing a server-issued nonce. Heimdall checks
+  that `sha256(public_key)` equals the claimed peer id, so nobody can
+  squat on another device's id.
+- A frontend registers with a ticket from mimir.
+- Ping/pong every 20 s; drop a socket that misses two.
+- Re-`register` of a live peer id replaces the old socket. This is what
+  makes agent restart work.
+- Rate limit per socket and per IP.
+- Heimdall does **not** decide who may open files. That is the grant,
+  checked inside the encrypted channel. Heimdall being fully compromised
+  must not grant anyone a single byte.
+- Push presence changes to mimir; reconcile every 30 s.
 
 ---
 
-## 8. Wire protocol
+## 9. The file protocol
 
 Two channels, two formats. Never mix them.
 
-### 8.1 Control channel — label `ctrl`
+### 9.1 Control channel — label `ctrl`
 
-Reliable, ordered. One JSON object per message.
+Reliable, ordered. One JSON object per message. Every request carries
+`version`, `request_id`, `type`; every reply echoes `request_id`.
 
 ```
-HELLO       -> HELLO           identity and version exchange
-AUTH        -> AUTH            signed nonce, both directions
-PING        -> PONG            liveness and round-trip time
-LIST        -> LIST_RESULT     directory listing
-STAT        -> STAT_RESULT     one entry
-OPEN        -> OPEN_OK         begin a transfer; returns transfer_id, size, hash
-CREDIT                         receiver grants N more chunks
-CANCEL                         stop a transfer
-ERROR                          code + safe message
+session
+  HELLO, AUTH            identity, grant, version. Nothing else is served first
+  PING -> PONG           liveness and round-trip time
+
+read
+  LIST  -> LIST_RESULT   directory listing, paged
+  STAT  -> STAT_RESULT   one entry
+  READ  -> READ_OK       start a download; returns transfer_id, size, hash
+
+write
+  WRITE -> WRITE_OK      start an upload; client then sends on the xfer channel
+  MKDIR -> OK
+  MOVE  -> OK            rename, or move within or between writable roots
+  COPY  -> COPY_OK       server-side copy, no round trip through the client
+  DELETE-> OK
+
+both
+  CREDIT                 receiver grants N more chunks
+  CANCEL                 stop a transfer
+  ERROR                  code + safe message
 ```
 
-Every request carries `version`, `request_id`, `type`.
-Every reply echoes `request_id`.
-No message other than `HELLO` and `AUTH` is served before auth completes.
+`COPY` earns its place: copying a 4 GB file inside one folder should not
+mean downloading and re-uploading it.
 
-Example:
+### 9.2 Transfer channel — label `xfer-<transfer_id>`
 
-```json
-{ "version": 1, "request_id": "01J...", "type": "LIST", "path": "/Documents" }
-```
-
-```json
-{
-  "version": 1,
-  "request_id": "01J...",
-  "type": "LIST_RESULT",
-  "entries": [
-    { "name": "movie.mkv", "kind": "file", "size": 4294967296,
-      "modified": "2026-09-05T08:00:00Z" }
-  ]
-}
-```
-
-### 8.2 Transfer channel — label `xfer-<transfer_id>`
-
-Reliable, ordered. Binary frames, no JSON.
+Reliable, ordered. Binary frames, no JSON. Used in both directions:
+download and upload are the same code with the roles swapped.
 
 ```
 bytes 0..3   uint32 big-endian sequence number
 bytes 4..N   payload, up to 16 KB
 ```
 
-An empty frame means end of file. Then the channel closes.
+An empty frame means end of stream, then the channel closes. `READ_OK`
+and the reply to a completed `WRITE` both carry a BLAKE3 hash so each
+side can verify what it got.
 
-`OPEN_OK` carries the size and a BLAKE3 hash of the whole file so the
-receiver can verify what it got.
+### 9.3 Limits, enforced by the agent
 
-### 8.3 Limits, enforced by the serving side
-
-- Control message larger than 64 KB → close the connection
-- More than 4 concurrent transfers per peer → refuse with `ERROR`
-- More than 8 connected peers → refuse the connection
-- Unknown message type → reply `ERROR`, do not close
+- Control message over 64 KB → close the connection
+- More than 4 concurrent transfers per peer → `ERROR`
+- More than 8 connected peers → refuse
+- Unknown message type → `ERROR`, do not close
 - `ERROR` never contains a real filesystem path or a stack trace
 
 ---
 
-## 9. Backpressure
+## 10. Write operations, carefully
 
-The disk reads far faster than the network sends. Without a brake,
-memory grows until something dies. Two brakes, both required.
+This is where a bug destroys a user's data instead of merely failing. It
+gets its own rules.
 
-**Local brake — send buffer.**
-Pause sending when `bufferedAmount` goes above 1 MB. Resume when it drops
-below 256 KB.
-Pion: `SetBufferedAmountLowThreshold` plus `OnBufferedAmountLow`.
+### 10.1 Permission
 
-**Remote brake — credit window.**
-The receiver sends `CREDIT { transfer_id, chunks: N }`. The sender may
-send at most N more chunks. Start with 64 credits, top up when half are
-spent.
+Every shared root has a mode, `ro` or `rw`. A write to an `ro` root is
+refused before any path work happens. The grant's `scopes` can narrow a
+root further but never widen it: an `ro` root stays `ro` even if a grant
+says `rw`.
 
-The local brake only knows about the local socket. It says nothing about
-whether the far side is keeping up with writing to disk. That is why both
-are needed.
+### 10.2 Atomic writes
 
-Chunk size is **16 KB**. The spec allows up to 256 KB, but 16 KB is the
-safe interoperable size and it performs fine.
+Never write in place. A dropped connection must not leave a half file
+where a good one used to be.
 
-Expected throughput: 30–100 MB/s on a LAN. Over the Internet, whatever
-the serving side's upload link gives.
+```
+upload to  <dir>/.ratatoskr-tmp-<transfer id>
+fsync the file
+fsync the directory
+rename over the target        (atomic on the same filesystem)
+```
+
+Clean up stale temp files on startup.
+
+### 10.3 Rules for each verb
+
+- **MKDIR** — no `-p` by default. Refuse if the parent is missing, so a
+  typo does not silently build a tree.
+- **MOVE** — validate source **and** destination independently against
+  the roots. Both must be `rw`. Refuse a move that crosses a filesystem
+  boundary unless it is implemented as copy-then-delete with a hash
+  check. Never overwrite without `overwrite: true`.
+- **DELETE** — never recursive unless `recursive: true` is explicit.
+  Never follow a symlink out of the root: delete the link, not its
+  target. Refuse to delete a share root itself.
+- **WRITE** — check free space before starting. Enforce a size cap.
+  Refuse if the target exists unless `overwrite: true`.
+- **COPY** — same destination rules as MOVE.
+
+### 10.4 Order of scope
+
+Uploads and deletes are not in the first working version. Get read,
+LIST and STAT solid first, because every write verb reuses the same path
+validation, and it is much cheaper to find a hole there while nothing can
+be destroyed.
 
 ---
 
-## 10. Path safety
+## 11. Path safety
 
-Every filesystem call, without exception:
+Every filesystem call, no exceptions:
 
 ```
 requested path
-      -> reject if it contains a null byte
-      -> filepath.Clean
-      -> join to the allowed root
-      -> filepath.EvalSymlinks   (resolves symlinks and junctions)
-      -> verify the result is still inside the root
-      -> open
+   -> reject if it contains a null byte
+   -> filepath.Clean
+   -> join to the allowed root
+   -> filepath.EvalSymlinks       resolves symlinks and junctions
+   -> verify the result is still inside the root
+   -> open
 ```
 
 `EvalSymlinks` is the step that stops a symlink pointing out of the
-shared folder. Do not skip it, and do the check on the **resolved** path,
-not the requested one.
+share. Check the **resolved** path, not the requested one.
 
-Windows needs extra care: `C:` style prefixes, `\\?\` paths, alternate
-data streams (`file.txt:stream`), and reserved names (`CON`, `NUL`,
-`COM1`). Reject anything that is not a plain relative path.
+For writes there is an extra trap: the destination usually does not exist
+yet, so `EvalSymlinks` cannot resolve it. Resolve the **parent
+directory** instead, verify that, then join the final element and confirm
+it contains no separator.
 
-The agent shares only explicitly listed roots. There is no default root.
+Windows needs extra care: `C:` prefixes, `\\?\` paths, alternate data
+streams (`file.txt:stream`), reserved names (`CON`, `NUL`, `COM1`),
+trailing dots and spaces. Reject anything that is not a plain relative
+path.
+
+There is no default root. The agent shares only what was explicitly
+added.
 
 ---
 
-## 11. Local control API
+## 12. Backpressure
 
-The agent runs an HTTP server on `127.0.0.1` on a random free port. It
-writes the port and a random token to a state file, mode `0600`:
+The disk moves far faster than the network. Without a brake, memory grows
+until something dies. Two brakes, both required, in both directions.
 
-| OS | Path |
-|----|------|
+**Local brake.** Pause when `bufferedAmount` goes above 1 MB, resume
+below 256 KB. Pion: `SetBufferedAmountLowThreshold` and
+`OnBufferedAmountLow`. In the browser: `bufferedamountlow`.
+
+**Remote brake.** The receiver sends `CREDIT { transfer_id, chunks: N }`.
+The sender may send at most N more. Start at 64, top up at half spent.
+
+The local brake only knows the local socket. It says nothing about
+whether the far side is keeping up with its disk. That is why both exist.
+
+Chunk size **16 KB**. The spec allows 256 KB, but 16 KB is the safe
+interoperable size and performs fine.
+
+Expect 30-100 MB/s on a LAN, and otherwise whatever the agent's upload
+link gives.
+
+### 12.1 Getting bytes to disk in a browser
+
+A 10 GB file cannot sit in a JavaScript variable.
+
+- **File System Access API** — `showSaveFilePicker()` gives a real
+  writable handle. Best path. Chrome, Edge, Opera on desktop.
+- **Service worker streaming** — the download URL is served by a service
+  worker returning a `ReadableStream`. Works in Firefox and Safari too.
+  More moving parts; the tab must stay open.
+- **Blob in memory** — small files only.
+
+Feature-detect and use the first available. Build the service worker
+path first, because it is the one that must work everywhere and the one
+that can surprise you.
+
+---
+
+## 13. Local control API on the agent
+
+The agent runs an HTTP server on `127.0.0.1` on a random free port, and
+writes the port plus a random token to `control.json`, mode 0600.
+
+| OS | Config dir |
+|----|-----------|
 | Linux | `~/.config/ratatoskr/` |
 | macOS | `~/Library/Application Support/ratatoskr/` |
 | Windows | `%AppData%\ratatoskr\` |
 
-In Go: `os.UserConfigDir()`. The directory holds `identity.key` (0600),
-`config.json`, and `control.json`.
+`os.UserConfigDir()`. The directory holds `identity.key` (0600),
+`config.json`, `control.json`.
 
-Every other CLI subcommand is an HTTP client against this API. So is any
-future UI. Bind to `127.0.0.1` only, never `0.0.0.0`. Require the token
-in an `Authorization` header.
-
-This is the single most valuable early decision: it means a UI can be
-written later in any language, and choosing that language costs nothing
-today.
+Every CLI subcommand is an HTTP client against this API, and so is any
+future desktop UI. Bind `127.0.0.1` only, never `0.0.0.0`. Require the
+token.
 
 ```
-GET  /v1/status        peer id, signaling state, discovered LAN peers,
-                       connected peers, connection type per peer
-GET  /v1/folders   POST /v1/folders   DELETE /v1/folders
-GET  /v1/trusted   POST /v1/trusted   DELETE /v1/trusted
-GET  /v1/peers
-GET  /v1/discover      what mDNS can currently see
-GET  /v1/events        server-sent events, for live status
+GET  /v1/status  /v1/peers  /v1/discover  /v1/events
+GET|POST|DELETE  /v1/folders  /v1/trusted
+POST /v1/pair    redeem a pairing code against mimir
 ```
 
-Note the difference from the LAN signal endpoint in 4.1: the control API
-is `127.0.0.1` and full power. The LAN signal endpoint is reachable by
-the network and can do exactly one thing.
+Note the contrast with the LAN signal endpoint in 7.3: the control API is
+loopback and full power; the LAN endpoint is network-reachable and can do
+exactly one harmless thing.
 
 ---
 
-## 12. CLI surface
+## 14. CLI surface
 
 ```
 ratatoskr run                     start the agent in the foreground
-ratatoskr id                      print this device's peer id and public key
-ratatoskr status                  online state, peers, direct or relay
-ratatoskr discover                list ratatoskr agents on this network
-ratatoskr peers                   currently connected peers
+ratatoskr id                      peer id and public key
+ratatoskr status                  presence, peers, measured path per peer
+ratatoskr discover                agents visible on this network
+ratatoskr peers                   connected peers
+ratatoskr pair CODE               pair this machine to an account
+ratatoskr folders list | add PATH [--rw] | remove PATH
+ratatoskr trusted   | trust ID [--name N] | untrust ID
 
-ratatoskr folders list | add PATH | remove PATH
-ratatoskr trusted     | trust ID [--name N] | untrust ID
-
-ratatoskr connect PEER_ID ls PATH         client mode: list a directory
-ratatoskr connect PEER_ID get PATH OUT    client mode: download a file
-ratatoskr connect PEER_ID --via lan|net   force one discovery method
+ratatoskr connect ID ls PATH
+ratatoskr connect ID get PATH OUT
+ratatoskr connect ID put SRC PATH
+ratatoskr connect ID mkdir|mv|rm PATH...
+ratatoskr connect ID --via lan|net       force one discovery path
 ratatoskr version
+
+heimdall serve --addr :8080 --mimir https://...
+mimir     serve --addr :8081 --db ...
 ```
 
-`run` is the process. Everything else is a thin HTTP client against a
-running `run`.
-
-`connect` is the client side. It exists so the whole system can be tested
-with two agents and no browser. Later it becomes machine-to-machine
-transfer, which is a feature in its own right.
-
-`--via` exists so tests can prove each discovery path separately instead
-of guessing which one won. `--via lan` also means "fail rather than fall
-back", which is what makes the Internet-unplugged test meaningful.
-
-```
-heimdall serve --addr :8080
-```
+`connect` is the agent acting as a client. It exists so the whole system
+is testable with two machines and no frontend at all — and it later
+becomes machine-to-machine transfer, which is a feature in its own right.
+`--via lan` fails rather than falling back, which is what makes the
+Internet-unplugged test mean something.
 
 ---
 
-## 13. Build and platform rules
+## 15. Build and platform rules
 
-**The agent must stay free of cgo.** Pion is pure Go. Keep it that way
-and one machine builds every target:
+**The agent stays free of cgo.** Pion is pure Go. Keep it that way and one
+machine builds every target:
 
 ```
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/ratatoskr.exe ./cmd/ratatoskr
 ```
 
-Consequences to respect:
-
-- No Go GUI toolkit inside the agent. All of them need cgo. A UI, if it
-  ever happens, is a separate binary that talks to the control API.
-- No tray icon in the agent. Same reason.
-- The mDNS library must be pure Go. This rules out anything wrapping
-  Apple's Bonjour or Avahi via cgo.
-- If SQLite is ever needed, use `modernc.org/sqlite` (pure Go), not
-  `mattn/go-sqlite3`.
+- No Go GUI toolkit in the agent; every one needs cgo. A desktop UI, if
+  it happens, is a separate binary on the control API.
+- The mDNS library must be pure Go. Rules out Bonjour and Avahi wrappers.
+- If SQLite is needed in the agent, `modernc.org/sqlite`, not
+  `mattn/go-sqlite3`. Mimir runs on a server and may use Postgres freely.
 
 ---
 
-## 14. Repository layout
+## 16. Repository layout
 
 ```
 ratatoskr/
 ├── cmd/
-│   ├── ratatoskr/        the agent CLI
-│   └── heimdall/         the rendezvous server
+│   ├── ratatoskr/     the agent
+│   ├── heimdall/      rendezvous
+│   └── mimir/         control plane
 ├── internal/
-│   ├── identity/         keypair, peer id, sign and verify
-│   ├── protocol/         wire messages, shared by both binaries
-│   ├── transport/        Pion, ICE, channels, backpressure
-│   ├── discovery/        the Discovery interface and the race
-│   │   ├── lan/          mDNS advertise, browse, local signal endpoint
-│   │   └── net/          heimdall client
-│   ├── signal/           heimdall server logic
-│   ├── fsroot/           allowed roots, path validation
-│   ├── control/          127.0.0.1 HTTP API and control.json
-│   └── config/           per-OS paths, folder list, allow list
-├── Makefile
-├── PLAN.md
-├── TODO.md
-└── go.mod
+│   ├── identity/      keypair, peer id, sign and verify
+│   ├── grant/         access grant issue and verify — shared by agent and mimir
+│   ├── protocol/      wire messages
+│   ├── transport/     Pion, ICE, channels, backpressure
+│   ├── discovery/     the Discovery interface and the LAN-first policy
+│   │   ├── lan/       mDNS advertise, browse, local signal endpoint
+│   │   └── net/       heimdall client
+│   ├── signal/        heimdall server logic
+│   ├── fsroot/        allowed roots, path validation
+│   ├── fsops/         list, stat, read, write, mkdir, move, copy, delete
+│   ├── control/       127.0.0.1 API
+│   └── config/        per-OS paths, folders, trust list
+├── web/               the browser app  (TypeScript, separate toolchain)
+├── Makefile · PLAN.md · TODO.md · go.mod
 ```
 
-One module, two binaries. They share `internal/protocol` and
-`internal/identity`, so the formats cannot drift apart. That is the
-reason to keep them together.
-
-`internal/discovery` defines one small interface with two
-implementations. Nothing above it knows whether a connection was found on
-the LAN or through heimdall — it only asks for a signalling session with
-a peer id.
+One Go module, three binaries. They share `internal/protocol`,
+`internal/identity` and `internal/grant`, so the formats cannot drift.
 
 ---
 
-## 15. Build order
-
-Each step has a check you can actually run. Do not move on early.
+## 17. Build order
 
 | Step | Goal | Passes when |
 |------|------|-------------|
-| 0 ✅ | Two agents, offer and answer pasted by hand | a string echoes back over a DataChannel |
-| 1 | Device identity: keypair, peer id, config dir | `ratatoskr id` prints a stable id across restarts, on all three OSes |
-| 2 | Mutual auth over `ctrl` | an untrusted peer id is refused; a tampered signature is refused |
-| 3 | heimdall rendezvous over the Internet | `ratatoskr connect <id>` links up with no pasting |
-| 4 | mDNS discovery and the local signal endpoint | `ratatoskr discover` lists the other machine; `connect --via lan` works with the router's Internet unplugged |
-| 5 | LAN-first discovery with a heimdall head start | on a LAN, heimdall is never contacted at all; multicast blocked falls through; a found-but-unreachable peer falls through too |
-| 6 | Control protocol: PING, LIST, STAT | a real listing prints; `../../etc/passwd` is refused |
-| 7 | Local control API | `ratatoskr status` talks to a running `ratatoskr run` |
-| 8 | Transfer one small file | a 10 MB file arrives, hash matches |
-| 9 | Backpressure and a large file | 10 GB transfers, memory flat on both sides |
-| 10 | Real NAT across the Internet | direct connection, proven by the logged candidate pair |
-| 11 | TURN fallback with coturn | 1 GB transfers with STUN disabled |
-| 12 | Survival | sleep, wake, network change, restart, cancel — never hangs |
+| 0 ✅ | Two agents, SDP pasted by hand | a string echoes over a DataChannel |
+| 1 | Device identity | `ratatoskr id` is stable across restarts on all three OSes |
+| 2 | Mutual auth + local trust list | an untrusted id is refused; a tampered signature is refused |
+| 3 | heimdall rendezvous | `connect --via net` links up with no pasting |
+| 4 | LAN discovery | `discover` sees the other machine; `--via lan` works with the uplink unplugged |
+| 5 | LAN-first policy | heimdall is never contacted on a LAN; both fallback triggers work |
+| 6 | LIST, STAT, path safety | a real listing prints; every hostile path is refused |
+| 7 | Agent control API | `ratatoskr status` talks to a running `ratatoskr run` |
+| 8 | Download a small file | 10 MB arrives, hash matches |
+| 9 | Backpressure, 10 GB | completes, memory flat on both sides |
+| 10 | **mimir**: accounts, devices, pairing, grants, presence | `GET /v1/devices` lists a paired machine and its presence |
+| 11 | **Web app** on `@cubone/react-file-manager` behind our own adapter: list machines, status, browse, download | requirements 1, 2, and the read half of 3 |
+| 12 | Real NAT across the Internet | direct connection, proven by the logged candidate pair |
+| 13 | TURN fallback | 1 GB transfers with STUN disabled |
+| 14 | **Write operations**: upload, mkdir, move, copy, delete | the whole of requirement 3, with section 10 enforced |
+| 15 | Survival | sleep, wake, network change, restart, cancel — never hangs |
+| 16 | Mobile app | including LAN discovery, which the web cannot do |
 
-Step 9 is the milestone that proves the project works.
-Step 10 is the first step that can genuinely fail.
+Step 9 proves the transport works. Step 11 is the first release anyone
+can use. Step 14 is where care matters most, because it is the first step
+that can destroy data.
+
+Steps 1-9 need no server at all. That is deliberate.
 
 ---
 
-## 16. Risks
+## 18. Risks
 
 | Risk | Likely | Response |
 |------|--------|----------|
-| TURN relay rate much higher than 20% | Medium | Measure it from step 10. It is the number that decides whether hosting stays cheap |
-| mDNS blocked on the networks you actually use | Medium | Expected. Falls through to heimdall after the head start. Measure how often LAN discovery wins |
-| Firewall prompts on first run confuse users | High | Two prompts, UDP 5353 and the local signal port. A packaging problem, note it now |
-| The LAN signal endpoint becomes an attack surface | Medium | It does exactly one thing and grants nothing. Real auth is inside the encrypted channel. Rate limit and fuzz it |
-| Windows path edge cases open a hole | Medium | Treat `internal/fsroot` as security code. Table-driven tests with hostile inputs |
-| Throughput disappoints on long-distance links | Medium | SCTP is latency sensitive. Test one intercontinental hop early |
-| Corporate networks block UDP entirely | Certain for some users | coturn on TCP and TLS port 443. A config, not a rewrite |
-| Upload speed of the serving machine is the real limit | Certain | Nothing to fix. Report it honestly |
+| Relay share much higher than 20% | Medium | Measure from step 12. It is the number that decides whether hosting stays cheap |
+| A write bug destroys user data | Medium | Section 10. Atomic rename, explicit flags, no recursion by default. Read-only until step 14 |
+| Path validation hole on writes | Medium | Writes resolve the parent, not the target. `internal/fsroot` is security code with hostile-input tables |
+| mimir becomes a single point of failure | High | It is. Grants are cached so an existing pairing survives an outage on the LAN. Say so in the UI |
+| Web client key lost when browser data is cleared | High | Expected. Re-pair flow must be one click, not a support ticket |
+| mDNS blocked on real networks | Medium | Falls through after the head start. Measure how often the LAN wins |
+| Firewall prompts confuse users at first run | High | Two prompts: UDP 5353 and the signal port. A packaging problem — note it now |
+| Browser cannot stream large downloads | Medium | Service worker path, built and tested at step 11, not at launch |
+| The chosen file-manager component turns out wrong | Medium | Everything goes through `fs-adapter.ts`. Replacing the library is one file, not a rewrite |
+| Corporate networks block UDP entirely | Certain for some | coturn on TCP and TLS 443. A config, not a rewrite |
+| Agent upload speed is the real ceiling | Certain | Nothing to fix. Report it honestly |
 
 ---
 
-## 17. Dependencies
+## 19. Dependencies
 
 | Project | Role | License |
 |---------|------|---------|
-| pion/webrtc | WebRTC in Go, both binaries | MIT |
+| pion/webrtc | WebRTC in Go | MIT |
 | coder/websocket | WebSocket, client and server | ISC |
-| a pure-Go mDNS library | LAN discovery — candidates: `libp2p/zeroconf/v2`, `grandcat/zeroconf`, `pion/mdns`. Pick at step 4 | MIT / Apache-2.0 |
+| pure-Go mDNS — `libp2p/zeroconf/v2`, `grandcat/zeroconf` or `pion/mdns` | LAN discovery. Pick at step 4 | MIT / Apache-2.0 |
 | zeebo/blake3 | File hashing | CC0 / Apache-2.0 |
-| coturn | TURN server, step 11, not bundled | BSD-3-Clause |
+| coturn | TURN server, step 13, not bundled | BSD-3-Clause |
 
-Ed25519, SHA-256 and base32 all come from the standard library. No
-dependency needed for identity.
+Ed25519, SHA-256 and base32 come from the standard library.
 
-Keep the list this short. Generate a third-party notices file before
-distributing any binary.
+Mimir's database and HTTP stack are its own choice and do not constrain
+the agent.
 
 ---
 
-## 18. Reserved for later
+## 20. Reusing an existing file manager
 
-Written down so the wire format does not have to change when they arrive.
+Worth doing. But only one of the two obvious shapes actually works.
 
-- **Account pairing.** A dashboard hands the agent a claim token; the
-  agent registers its public key against an account; the account hands
-  out the allow list. Nothing in sections 3, 7 or 8 changes.
-- **Browser client.** A third kind of peer speaking the same protocol.
-  Discovery via heimdall only, per 4.4.
-- **Browser on an offline LAN.** Needs real TLS on a private address.
-  A project of its own.
+### 20.1 Server-side file managers do not work here
+
+Filestash, File Browser (`filebrowser/filebrowser`), Nextcloud. These are
+tempting, and their plugin seams are genuinely clean — Filestash has an
+`IBackend` interface with exactly our verbs, and File Browser sits on
+`afero.Fs`, so a Go adapter over our protocol would be a day's work.
+
+Do not do it.
+
+They run **on a server**. The bytes would flow
+`agent -> your VPS -> browser`. That puts your VPS on the data path and
+destroys the cost model, which is the single reason this project exists.
+Filestash is also AGPL-3.0, a real constraint for a hosted product.
+
+> Rule: if the file manager runs on a server, it is wrong for this
+> architecture, however good its plugin API is.
+
+### 20.2 What does work: a presentational component in the browser
+
+The WebRTC peer lives in the browser tab. So the file manager has to be a
+client-side component whose data layer we supply.
+
+| Library | Licence | Fit | Notes |
+|---------|---------|-----|-------|
+| `@cubone/react-file-manager` | MIT | good | Handler-based: `onCreateFolder`, `onDelete`, `onPaste`, `onRename`, `onDownload`, `onFileUploading`. Maintained. Ships an opinionated UI |
+| SVAR React File Manager | check it | good | Polished, TypeScript, list/tiles/split views. Confirm the licence terms before committing |
+| Chonky | MIT | fair | The best known one. Original is archived; several community forks. Right shape, but building on a fork is a maintenance bet |
+| DevExtreme FileManager | commercial | best technical fit | `CustomFileSystemProvider` is almost exactly our RPC: `getItems`, `createDirectory`, `renameItem`, `deleteItem`, `moveItem`, `copyItem`, `uploadFileChunk`, `downloadItems`. Costs money |
+| `react-keyed-file-browser`, `@opuscapita/react-filemanager` | MIT | fair | Older, low activity |
+
+**Start with `@cubone/react-file-manager` at step 11.** MIT, maintained,
+and its handler set already lines up with our verbs.
+
+**The rule that keeps this reversible:** every call into the component
+goes through one adapter module, `web/src/fs-adapter.ts`, which exposes
+our verbs and nothing else. The rest of the app talks to the adapter.
+Swapping libraries then touches one file instead of the whole app.
+
+Two jobs no library will do, which stay ours either way:
+
+- Streaming a multi-GB download to disk (12.1). Every library assumes a
+  URL it can hand to the browser.
+- Backpressure and progress over a DataChannel. Every library assumes
+  `fetch` or XHR.
+
+### 20.3 The bigger win: speak WebDAV locally
+
+Our verb set is already the WebDAV verb set:
+
+```
+LIST   -> PROPFIND          WRITE  -> PUT
+STAT   -> PROPFIND depth 0  MKDIR  -> MKCOL
+READ   -> GET               MOVE   -> MOVE
+DELETE -> DELETE            COPY   -> COPY
+```
+
+That is not a coincidence, and it should stay true.
+
+So a later `ratatoskr mount <device-id>` can run a small WebDAV server on
+`127.0.0.1` that translates to our protocol over WebRTC. Then, free:
+
+- macOS Finder — *Go → Connect to Server*
+- Windows Explorer — *Map network drive*
+- Cyberduck, Mountain Duck, rclone, Nautilus, Dolphin
+- Every application's Open and Save dialog
+
+A real native file manager on every desktop, for the cost of one adapter,
+with the bytes still going peer to peer. Not now — but keep the RPC verbs
+WebDAV-shaped so it stays a small job later.
+
+### 20.4 Mobile
+
+Nothing reusable worth adopting. Build it. It is the smallest of the
+three surfaces.
+
+---
+
+## 21. Not now
+
+`ratatoskr mount` — the local WebDAV bridge of 20.3 · version history ·
+sync · file search across devices · sharing with other accounts · public
+links · thumbnails and previews · multi-user ACLs on one device · a
+desktop UI · a browser on a LAN with no Internet at all (needs real TLS
+on a private address; Plex does it; it is a project of its own).
