@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/achmadss/ratatoskr/internal/stun"
 	"github.com/libp2p/go-libp2p"
@@ -121,10 +122,17 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	if len(infos) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(infos))
 	}
-	// AutoNAT decides whether a relay reservation is needed, and on a
-	// loopback test it correctly decides no. This forces the answer so
-	// the relay path can be exercised without two real networks.
-	if os.Getenv("RATATOSKR_FORCE_PRIVATE") != "" {
+	// AutoRelay reserves a slot only once AutoNAT has ruled this machine
+	// unreachable, and AutoNAT wants several independent peers to agree
+	// before it rules anything. A private drive has one relay and its
+	// owner's two laptops, so it never concludes: no verdict, no
+	// reservation, and a machine nobody can dial is not a drive. Naming
+	// a relay in the config is the owner saying they expect to need one,
+	// which is the answer AutoNAT could not reach on its own.
+	//
+	// A machine that really is reachable loses nothing: it keeps
+	// advertising its direct addresses, and peers prefer them.
+	if len(infos) > 0 && os.Getenv("RATATOSKR_ASSUME_PUBLIC") == "" {
 		opts = append(opts, libp2p.ForceReachabilityPrivate())
 	}
 
@@ -133,7 +141,30 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
 	go findPublicAddr(h, &public)
+	go holdRelays(h, infos)
 	return &Host{h: h}, nil
+}
+
+// holdRelays dials every configured relay at startup.
+//
+// AutoRelay only reserves a slot once AutoNAT has decided this machine
+// is unreachable, and AutoNAT cannot decide anything without a peer to
+// ask. An idle agent has no peers, so it kept no reservation, reached no
+// verdict, and stayed unreachable from anywhere but its own LAN — a
+// drive nobody can dial is not a drive. Dialling the relay breaks the
+// circle: it is the peer AutoNAT needs and the host AutoRelay reserves
+// with.
+//
+// One attempt each, in the background, because a relay that is down is a
+// reason to run LAN-only rather than a reason not to start.
+func holdRelays(h host.Host, relays []peer.AddrInfo) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, r := range relays {
+		if err := h.Connect(ctx, r); err != nil {
+			fmt.Fprintf(os.Stderr, "relay %s unreachable: %v\n", r.ID, err)
+		}
+	}
 }
 
 // findPublicAddr asks a reflector where we are and, if the answer can be

@@ -125,6 +125,8 @@ environment (empty means the default):
   RATATOSKR_BENCH_MB        default benchmark size               (100)
   RATATOSKR_RELAY_CAP       bytes one relayed transfer may move,
                             K/M/G suffixes. 0 means no cap.        (0)
+  RATATOSKR_ASSUME_PUBLIC   skip the relay reservation on a machine
+                            that is genuinely reachable from outside
   RATATOSKR_STUN            natcheck reflectors, comma separated.
                             Needs two addresses, and two ports on
                             one of them to separate the last two

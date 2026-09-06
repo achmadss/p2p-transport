@@ -69,9 +69,11 @@ heimdall on a real VPS and are still missing.
 
 Three traps this step exposed. libp2p marks a relayed connection
 *limited* and refuses streams on it unless the dial passes
-`network.WithAllowLimitedConn`. AutoNAT will not take a reservation when
-it thinks it is reachable, so `RATATOSKR_FORCE_PRIVATE=1` forces the
-relay path for testing and must never be set in production. And a
+`network.WithAllowLimitedConn`. AutoNAT wants several independent peers
+to agree before it rules a machine unreachable, and a private drive
+never has that many, so configuring a relay now forces the reservation
+and `RATATOSKR_ASSUME_PUBLIC` opts a genuinely reachable machine out.
+And a
 circuit address does not appear in `host.Addrs()` on loopback, so `run`
 prints the peer id to copy rather than an address it cannot promise.
 

@@ -107,10 +107,10 @@ so the remaining boxes stay open until heimdall runs on the VPS.
 
 Two things loopback taught anyway. A relayed connection is *limited* in
 libp2p and refuses streams unless the dial opts in, which is why the
-first relayed attempt hung rather than failed. And AutoNAT correctly
-declines to reserve when it believes it is reachable, so
-`RATATOSKR_FORCE_PRIVATE=1` exists to force the relay path in testing
-and must never be set in production.
+first relayed attempt hung rather than failed. And AutoNAT declines to
+reserve until it believes it is unreachable, which on loopback needed
+forcing; the same gate turned out to block every real machine too, and
+is now settled by the config rather than by an environment variable.
 
 **Measured, 6 Sep 2026.** heimdall on a VPS at 103.181.143.222, a
 MacBook and a Windows box on the same home Wi-Fi. The relay sits behind
