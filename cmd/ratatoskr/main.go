@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/achmadss/ratatoskr/internal/transport"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -36,6 +39,13 @@ const lanHeadStart = 400 * time.Millisecond
 // local network does.
 const dialTimeout = 30 * time.Second
 
+// benchTimeout covers a whole measurement, which moves real bytes.
+const benchTimeout = 10 * time.Minute
+
+// punchWindow is how long a relayed connection is watched for a DCUtR
+// upgrade before the punch is called a failure.
+const punchWindow = 30 * time.Second
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -53,6 +63,12 @@ func main() {
 		err = run()
 	case "discover":
 		err = discover(len(args) > 0 && args[0] == "--full")
+	case "bench":
+		if len(args) == 0 {
+			err = fmt.Errorf("bench needs a machine id")
+			break
+		}
+		err = bench(args[0], via(args[1:]), size(args[1:]))
 	case "connect":
 		if len(args) == 0 {
 			err = fmt.Errorf("connect needs a machine id or fingerprint")
@@ -78,6 +94,8 @@ func usage() {
   discover [--full]    list Ratatoskr machines on this network
   connect ID [--via lan|relay|auto]
                        connect to a machine by id or fingerprint
+  bench ID [--via ...] [--mb N]
+                       measure throughput to a machine, default 100 MB
 `)
 }
 
@@ -140,6 +158,16 @@ func run() error {
 		return err
 	}
 	defer h.Close()
+
+	h.Handle(transport.BenchProto, func(s network.Stream) {
+		defer s.Close()
+		n, err := io.Copy(io.Discard, s)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return
+		}
+		fmt.Fprintf(s, "%d\n", n)
+	})
 
 	h.Handle(transport.EchoProto, func(s network.Stream) {
 		defer s.Close()
@@ -222,7 +250,7 @@ func connect(want, path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
 
-	s, err := open(ctx, h, lan, want, path)
+	s, err := open(ctx, h, lan, want, path, transport.EchoProto)
 	if err != nil {
 		return err
 	}
@@ -253,7 +281,7 @@ func connect(want, path string) error {
 // machine on this network should be reached on this network: nothing
 // leaves it, and it is faster. The relay is the fallback, never the
 // first choice. PLAN.md §6.
-func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path string) (network.Stream, error) {
+func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path string, proto protocol.ID) (network.Stream, error) {
 	switch path {
 	case "lan", "relay", "auto":
 	default:
@@ -271,7 +299,7 @@ func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path
 
 		switch {
 		case err == nil:
-			s, dialErr := h.DialPeer(ctx, info, transport.EchoProto)
+			s, dialErr := h.DialPeer(ctx, info, proto)
 			if dialErr == nil {
 				return s, nil
 			}
@@ -285,13 +313,13 @@ func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path
 		}
 	}
 
-	return dialRelay(ctx, h, want)
+	return dialRelay(ctx, h, want, proto)
 }
 
 // dialRelay reaches a machine through heimdall. Discovering its address
 // is mimir's job, which does not exist yet, so the circuit address is
 // built from a configured relay plus a full peer id.
-func dialRelay(ctx context.Context, h *transport.Host, want string) (network.Stream, error) {
+func dialRelay(ctx context.Context, h *transport.Host, want string, proto protocol.ID) (network.Stream, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -312,5 +340,107 @@ func dialRelay(ctx context.Context, h *transport.Host, want string) (network.Str
 		}
 		addrs = append(addrs, a)
 	}
-	return h.DialRelayed(ctx, peer.AddrInfo{ID: id, Addrs: addrs}, transport.EchoProto)
+	return h.DialRelayed(ctx, peer.AddrInfo{ID: id, Addrs: addrs}, proto)
 }
+
+// size reads --mb. 100 MB is long enough to leave the slow start behind
+// and short enough to run over a relay without regret.
+func size(args []string) int64 {
+	for i, a := range args {
+		if a == "--mb" && i+1 < len(args) {
+			if n, err := strconv.ParseInt(args[i+1], 10, 64); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 100
+}
+
+// bench measures a path and watches for a hole punch. These are the
+// numbers TODO step 3 exists to produce: throughput, and whether a
+// relayed connection becomes a direct one and how long that took.
+func bench(want, path string, mb int64) error {
+	h, err := start()
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+
+	lan, err := discovery.Start(h.Host())
+	if err != nil {
+		return err
+	}
+	defer lan.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), benchTimeout)
+	defer cancel()
+
+	s, err := open(ctx, h, lan, want, path, transport.BenchProto)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	peerID := s.Conn().RemotePeer()
+	first := transport.Describe(s.Conn()).Path
+	fmt.Printf("connected to %s over %s\n", identity.Short(peerID.String()), first)
+
+	total := mb << 20
+	start := time.Now()
+	if _, err := io.CopyN(s, zeros{}, total); err != nil {
+		return fmt.Errorf("send: %w", err)
+	}
+	if err := s.CloseWrite(); err != nil {
+		return fmt.Errorf("half close: %w", err)
+	}
+	reply, err := bufio.NewReader(s).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	elapsed := time.Since(start)
+
+	got, err := strconv.ParseInt(strings.TrimSpace(reply), 10, 64)
+	if err != nil {
+		return fmt.Errorf("far end reported %q, not a byte count", strings.TrimSpace(reply))
+	}
+	if got != total {
+		return fmt.Errorf("sent %d bytes, far end received %d", total, got)
+	}
+
+	fmt.Printf("%d MB in %s = %.1f MB/s\n", mb, elapsed.Round(time.Millisecond),
+		float64(total)/(1<<20)/elapsed.Seconds())
+
+	if first == transport.PathRelay {
+		watchUpgrade(h, peerID)
+	}
+	return nil
+}
+
+// watchUpgrade waits to see whether DCUtR turns the relayed connection
+// into a direct one, and how long it takes. A punch that never lands is
+// as much a result as one that does.
+func watchUpgrade(h *transport.Host, id peer.ID) {
+	start := time.Now()
+	deadline := time.After(punchWindow)
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			fmt.Printf("still relayed after %s: no hole punch\n", punchWindow)
+			return
+		case <-tick.C:
+			if p := h.PathTo(id); p == transport.PathDirect || p == transport.PathLAN {
+				fmt.Printf("upgraded to %s after %s\n", p, time.Since(start).Round(time.Millisecond))
+				return
+			}
+		}
+	}
+}
+
+// zeros is an endless reader. The bytes are incompressible enough for
+// this: nothing on the path compresses, so their content does not matter.
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) { return len(p), nil }

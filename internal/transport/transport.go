@@ -31,6 +31,11 @@ import (
 // control and transfer protocols of PLAN.md §9 replace it.
 const EchoProto = protocol.ID("/ratatoskr/echo/1.0.0")
 
+// BenchProto measures a path. The far end sinks bytes and reports how
+// many arrived; sending them back would double the relay's bill and
+// halve the number. Deleted with EchoProto when the File API lands.
+const BenchProto = protocol.ID("/ratatoskr/bench/1.0.0")
+
 // Path is how a session reached the far end. It is measured from a live
 // connection, never guessed. PLAN.md §14.
 type Path string
@@ -194,6 +199,25 @@ func (t *Host) dial(ctx context.Context, info peer.AddrInfo, p protocol.ID) (net
 	}
 	return s, nil
 }
+
+// PathTo reports how this machine currently reaches a peer, across every
+// open connection. A relayed connection that DCUtR later upgrades leaves
+// a direct one here, which is how the upgrade is observed rather than
+// assumed.
+func (t *Host) PathTo(id peer.ID) Path {
+	best := PathUnknown
+	for _, c := range t.h.Network().ConnsToPeer(id) {
+		switch p := pathOfConn(c); p {
+		case PathLAN, PathDirect:
+			return p
+		case PathRelay:
+			best = p
+		}
+	}
+	return best
+}
+
+func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 
 func (t *Host) Close() error { return t.h.Close() }
 

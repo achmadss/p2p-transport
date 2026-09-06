@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/achmadss/ratatoskr/internal/identity"
 	"github.com/libp2p/go-libp2p"
@@ -47,9 +48,16 @@ func run() error {
 	}
 	defer h.Close()
 
-	// ponytail: default reservation and bandwidth limits. Per-account
-	// limits and metering are step 11, and need mimir to have accounts.
-	if _, err := relay.New(h); err != nil {
+	// libp2p's default circuit allows 128 KB over two minutes, which is
+	// sized for signalling rather than for files. A relayed transfer here
+	// is a whole video, so the limit is raised to something a person
+	// would actually hit.
+	//
+	// ponytail: one limit for everyone. Per-account limits and metering
+	// are step 11, and need mimir to have accounts to meter.
+	res := relay.DefaultResources()
+	res.Limit = &relay.RelayLimit{Duration: time.Hour, Data: 64 << 30}
+	if _, err := relay.New(h, relay.WithResources(res)); err != nil {
 		return fmt.Errorf("start relay: %w", err)
 	}
 
