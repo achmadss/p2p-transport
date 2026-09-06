@@ -180,6 +180,13 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not an address: %w", err)
 	}
+	// Go resolves the empty string to :0 and reports no error, so an
+	// operator who presses enter on a blank line gets a test that sends
+	// every packet to nowhere and reports that nothing arrived — a
+	// failure indistinguishable from the one being investigated.
+	if peer.IP == nil || peer.IP.IsUnspecified() || peer.Port == 0 {
+		return nil, fmt.Errorf("no address given: paste the other machine's punch address")
+	}
 
 	// Ask again now the waiting is over. A keepalive holds the mapping
 	// open but cannot promise the carrier kept the same external port, and
