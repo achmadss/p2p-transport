@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"os"
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
@@ -65,8 +66,10 @@ func punchQUIC(role string) error {
 	// Setting the window to zero makes QUIC the first thing this socket
 	// ever sends to the peer, which is the one condition the agent is
 	// always in and this test never was.
+	// config.Duration reads a zero as "unset" and hands back the default,
+	// which is right everywhere else and wrong here: zero is the setting.
 	raw := -1
-	if w := config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second); w > 0 {
+	if w := config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second); os.Getenv("RATATOSKR_PUNCH_RAW") != "0" && w > 0 {
 		raw = rawPunch(c, peer, w)
 		fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
 		if raw == 0 {
