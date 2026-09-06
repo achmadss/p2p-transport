@@ -15,6 +15,13 @@
 #
 # The relay is used for signalling and for the first connection only.
 # The line that decides the test is the one about the upgrade.
+#
+# The two machines must be on DIFFERENT networks. DCUtR exchanges public
+# addresses only, so two machines behind one router both offer that
+# router's address and the punch has to loop back through it — NAT
+# hairpinning, which most home routers refuse. A same-network run fails
+# for that reason and measures nothing. Two machines on one LAN reach
+# each other over mDNS instead, which is what `connect --via auto` does.
 set -u
 
 # git-bash rewrites anything shaped like a unix path, multiaddrs
@@ -64,6 +71,8 @@ dial)
 	grep -E "initiating hole punch|received hole punch|hole punch attempt|attempting direct dial|no public address" "$log" | tail -12
 	echo
 	echo "send $log and the other machine's nattest-serve.log"
+	echo "if both addresses above share one ip, the machines are behind"
+	echo "one router and this test cannot pass; move one to another network."
 	;;
 *)
 	sed -n '2,20p' "$0"
