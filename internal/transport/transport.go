@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
@@ -105,7 +107,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// connection into a direct one when both ends can be punched
 		// through. Both are why the relay is a fallback and not a bill.
 		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(),
+		libp2p.EnableHolePunching(holepunch.WithAddrFilter(punchFilter{hasIPv6: hasGlobalIPv6})),
 		// Ask the home router to forward a port, the way a torrent
 		// client does. This is what makes a relay a genuine last
 		// resort rather than the only route: a machine with a
@@ -218,6 +220,62 @@ func HandleObserved(h host.Host) {
 		s.SetDeadline(time.Now().Add(10 * time.Second))
 		io.WriteString(s, s.Conn().RemoteMultiaddr().String())
 	})
+}
+
+// punchFilter keeps a hole punch to an address family this machine can
+// actually route.
+//
+// A phone hotspot hands out real IPv6 and a fixed line here does not, so
+// the far peer offers four IPv6 addresses and one IPv4. Every IPv6 dial
+// fails instantly with "no route to host", and the one address that
+// could have worked is left to whatever is still on the clock. An
+// address we cannot reach is also an address we never punch towards, and
+// a punch only one side makes is not a punch.
+//
+// Nothing is filtered when this machine does have IPv6: two peers that
+// both have it should meet over it and skip the NAT entirely.
+type punchFilter struct{ hasIPv6 func() bool }
+
+// FilterLocal leaves what we offer alone. An address we published is one
+// a peer was told to dial, and withdrawing it here would only make the
+// two lists disagree.
+func (punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	return as
+}
+
+func (f punchFilter) FilterRemote(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	if f.hasIPv6() {
+		return as
+	}
+	out := as[:0:0]
+	for _, a := range as {
+		if _, err := a.ValueForProtocol(multiaddr.P_IP6); err == nil {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// hasGlobalIPv6 reports whether any interface holds a globally routable
+// IPv6 address. Link-local and unique-local do not count: neither
+// reaches a peer on the Internet, and both are handed out by machines
+// with no IPv6 service at all.
+func hasGlobalIPv6() bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP.To4() != nil {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(n.IP); ok && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+			return true
+		}
+	}
+	return false
 }
 
 // cgnat is carrier-grade NAT space: the ISP's own network, reachable

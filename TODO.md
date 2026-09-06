@@ -239,6 +239,22 @@ sides press enter together. Packets arrive in both directions at 15,
 1200 and 1280 bytes. These two carriers punch; the sizes are not a
 factor and never were.
 
+**And the punch was dialling the wrong address family.** On the hotspot
+the phone hands Windows real public IPv6; this fixed line has none, not
+even a route. So the Mac's punch set was one IPv4 address and four IPv6
+ones, and its own log says what happened to them:
+
+    * [/ip6/2404:c0:5d10:355b:.../udp/54032/quic-v1] sendmsg: no route to host
+    * [/ip6/2404:c0:5d10:355b:.../tcp/62469] connect: no route to host
+    * [/ip4/182.6.161.1/udp/41654/quic-v1] hole punching attempted; no active dial
+
+An address this machine cannot route is an address it never punches
+towards, and a punch one side makes alone is not a punch. A
+`holepunch.WithAddrFilter` now drops IPv6 from the remote set when no
+interface holds a globally routable IPv6 address, and keeps it when one
+does — two peers that both have IPv6 should meet over it and skip the
+NAT entirely.
+
 So heimdall answers `/ratatoskr/observed/1.0.0` with the remote address
 of the connection the question arrived on. That is the QUIC socket's own
 external address, measured rather than guessed, and it is exactly what

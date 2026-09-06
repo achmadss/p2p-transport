@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // TestUsableObservedRefusesWhatItCannotPromise pins the filter. Every
@@ -87,4 +88,27 @@ func newHost(t *testing.T) host.Host {
 	}
 	t.Cleanup(func() { h.Close() })
 	return h
+}
+
+// TestPunchFilterDropsWhatItCannotRoute pins the rule that cost a whole
+// evening: a machine with no IPv6 must not spend its punch window
+// dialling a peer's IPv6 addresses, and a machine with IPv6 must keep
+// them, because that path has no NAT in it at all.
+func TestPunchFilterDropsWhatItCannotRoute(t *testing.T) {
+	offered := []multiaddr.Multiaddr{
+		multiaddr.StringCast("/ip4/182.6.161.1/udp/41654/quic-v1"),
+		multiaddr.StringCast("/ip6/2404:c0:5d10:355b::1/udp/54032/quic-v1"),
+		multiaddr.StringCast("/ip6/2404:c0:5d10:355b::1/tcp/62469"),
+	}
+
+	no := punchFilter{hasIPv6: func() bool { return false }}
+	got := no.FilterRemote("", offered)
+	if len(got) != 1 || got[0].String() != "/ip4/182.6.161.1/udp/41654/quic-v1" {
+		t.Fatalf("without IPv6, punch set = %v, want the IPv4 address alone", got)
+	}
+
+	yes := punchFilter{hasIPv6: func() bool { return true }}
+	if got := yes.FilterRemote("", offered); len(got) != len(offered) {
+		t.Fatalf("with IPv6, punch set = %v, want all %d", got, len(offered))
+	}
 }
