@@ -54,6 +54,20 @@ func punchQUIC(role string) error {
 		return err
 	}
 
+	// Punch first, in the open, and say how many packets crossed.
+	//
+	// Without this the run reports "no QUIC connection" and means two
+	// different things at once: the path was shut, or the path was open
+	// and QUIC alone could not cross it. Those are opposite answers, and
+	// telling them apart used to need a second machine, a second operator
+	// and a capture. quic.Transport takes the socket over, so the count
+	// has to be taken before it does.
+	raw := rawPunch(c, peer, config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second))
+	fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
+	if raw == 0 {
+		fmt.Println("  the path is shut, so this run says nothing about QUIC.")
+	}
+
 	tr := &quic.Transport{Conn: c}
 	defer tr.Close()
 
@@ -88,9 +102,14 @@ func punchQUIC(role string) error {
 	if err := speakQUIC(ctx, tr, peer, role); err != nil {
 		close(stop)
 		fmt.Printf("  no QUIC connection: %v\n\n", err)
-		fmt.Println("QUIC could not complete a handshake through the hole. Run punchtest")
-		fmt.Println("now, on the same two networks: if bare packets cross and this does")
-		fmt.Println("not, the path passes datagrams but not a handshake.")
+		if raw > 0 {
+			fmt.Println("Bare packets crossed this path seconds ago and a handshake could")
+			fmt.Println("not. The path passes datagrams but not QUIC, and no library or")
+			fmt.Println("configuration would have got through it.")
+		} else {
+			fmt.Println("Nothing crossed at all, so the path was shut and QUIC was never")
+			fmt.Println("tested. Start both sides closer together and run it again.")
+		}
 		return nil
 	}
 	close(stop)
@@ -100,6 +119,43 @@ func punchQUIC(role string) error {
 	fmt.Println("problem, and neither is quic-go: whatever fails in `connect` fails")
 	fmt.Println("above them both.")
 	return nil
+}
+
+// rawPunch sends and counts bare packets for a fixed window, so the QUIC
+// result that follows can be read against a known path.
+func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
+	stop := time.Now().Add(window)
+	fmt.Printf("\npunching bare packets at %s for %s.\n", peer, window)
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		p := append([]byte{'S'}, make([]byte, 14)...)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			c.WriteToUDP(p, peer)
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+
+	var got int
+	buf := make([]byte, 2000)
+	for time.Now().Before(stop) {
+		c.SetReadDeadline(stop)
+		n, from, err := c.ReadFromUDP(buf)
+		if err != nil {
+			break
+		}
+		if n > 0 && from.IP.Equal(peer.IP) {
+			got++
+		}
+	}
+	c.SetReadDeadline(time.Time{})
+	return got
 }
 
 // speakQUIC handshakes over an already-punched socket and echoes one
