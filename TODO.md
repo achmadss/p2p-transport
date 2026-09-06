@@ -54,13 +54,17 @@ authorisation work.
 
 ## Step 2 — mDNS discovery and LAN dial
 
-- [ ] libp2p mDNS discovery service, advertising the peer id
-- [ ] `internal/discovery`: the interface, plus the mDNS implementation
-- [ ] `ratatoskr discover` lists agents on this network
-- [ ] Dial a discovered peer by its LAN multiaddr, with no relay in the
+- [x] libp2p mDNS discovery service, advertising the peer id
+- [x] `internal/discovery`: the mDNS implementation. No interface yet —
+      there is one implementation, and mimir lookup in step 10 is what
+      would justify putting something behind it
+- [x] `ratatoskr discover` lists agents on this network
+- [x] Dial a discovered peer by its LAN multiaddr, with no relay in the
       dial set, so nothing leaves the network
-- [ ] `ratatoskr run` and `ratatoskr connect ID --via lan`
-- [ ] Re-advertise when the network interface changes
+- [x] `ratatoskr run` and `ratatoskr connect ID`. There is no `--via`
+      flag yet: LAN is the only path that exists, so a flag choosing
+      between one option would be a lie. It arrives with step 3
+- [x] Re-advertise when the network interface changes
 - [ ] Test on macOS, Windows and Linux; record every firewall prompt
 - [ ] Test with the router's uplink physically unplugged
 

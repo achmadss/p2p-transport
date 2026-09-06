@@ -47,6 +47,19 @@ no command that edits it yet.
 Set `RATATOSKR_CONFIG_DIR` to run two agents on one machine. The tests
 rely on it.
 
+**TODO step 2 is mostly done.** `internal/discovery` advertises and finds
+peers over mDNS (`_ratatoskr._udp`), re-advertising when this machine's
+addresses change. `ratatoskr run`, `discover` and `connect` work with no
+server and no Internet. Still open: the Windows and Linux runs, the
+firewall prompts, and the unplugged-router test.
+
+`run` answers the echo protocol only; the File API is step 4. `connect`
+has no `--via` flag yet, because LAN is the only path that exists.
+
+`transport.DialPeer` strips circuit addresses from the dial set. That is
+load-bearing, not tidiness: a peer found on the LAN must be reached on
+the LAN or not at all.
+
 Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands

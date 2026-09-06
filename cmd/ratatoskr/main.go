@@ -1,9 +1,5 @@
 // Command ratatoskr is both the agent and the client. One keypair, one
 // peer id, both roles.
-//
-// The dev-listen and dev-dial subcommands are step 0 scaffolding. They
-// prove a Noise-secured QUIC stream carries bytes between two machines,
-// and they go away once run/connect of PLAN.md §16 replace them.
 package main
 
 import (
@@ -17,6 +13,7 @@ import (
 	"time"
 
 	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/ratatoskr/internal/discovery"
 	"github.com/achmadss/ratatoskr/internal/identity"
 	"github.com/achmadss/ratatoskr/internal/transport"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -24,25 +21,33 @@ import (
 
 const version = "0.0.1"
 
+// lanTimeout is how long a command waits for mDNS. Answers arrive in
+// milliseconds on a working network; this is the give-up point.
+const lanTimeout = 3 * time.Second
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
+	args := os.Args[2:]
+
 	var err error
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("ratatoskr", version)
 	case "id":
-		err = showID(len(os.Args) > 2 && os.Args[2] == "--full")
-	case "dev-listen":
-		err = devListen()
-	case "dev-dial":
-		if len(os.Args) < 3 {
-			err = fmt.Errorf("dev-dial needs an address")
+		err = showID(len(args) > 0 && args[0] == "--full")
+	case "run":
+		err = run()
+	case "discover":
+		err = discover(len(args) > 0 && args[0] == "--full")
+	case "connect":
+		if len(args) == 0 {
+			err = fmt.Errorf("connect needs a machine id or fingerprint")
 			break
 		}
-		err = devDial(os.Args[2])
+		err = connect(args[0])
 	default:
 		usage()
 		os.Exit(2)
@@ -58,8 +63,9 @@ func usage() {
 
   version              print the version
   id [--full]          print this machine's identity
-  dev-listen           listen and echo (step 0 scaffold)
-  dev-dial <addr>      dial an address and echo a line (step 0 scaffold)
+  run                  serve this machine on the local network
+  discover [--full]    list Ratatoskr machines on this network
+  connect ID           connect to a machine by id or fingerprint
 `)
 }
 
@@ -85,12 +91,20 @@ func showID(full bool) error {
 	return nil
 }
 
-func devListen() error {
+// start brings up this machine's host under its stored identity.
+func start() (*transport.Host, error) {
 	id, err := identity.LoadOrCreate()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	h, err := transport.New(id.PrivateKey())
+	return transport.New(id.PrivateKey())
+}
+
+// run serves this machine. Until the File API lands it answers the echo
+// protocol only, which is enough to prove a peer reached us and over
+// which path.
+func run() error {
+	h, err := start()
 	if err != nil {
 		return err
 	}
@@ -99,22 +113,20 @@ func devListen() error {
 	h.Handle(transport.EchoProto, func(s network.Stream) {
 		defer s.Close()
 		c := transport.Describe(s.Conn())
-		fmt.Printf("stream from %s over %s (%s) at %s\n",
-			c.Peer, c.Transport, c.Path, c.Addr)
+		fmt.Printf("%s connected over %s\n", identity.Short(c.Peer.String()), c.Path)
 		if _, err := io.Copy(s, s); err != nil {
-			fmt.Fprintln(os.Stderr, "echo:", err)
+			fmt.Fprintln(os.Stderr, "stream:", err)
 		}
 	})
 
-	addrs, err := h.Addrs()
+	lan, err := discovery.Start(h.Host())
 	if err != nil {
 		return err
 	}
-	fmt.Println("peer id:", h.ID())
-	fmt.Println("dial one of:")
-	for _, a := range addrs {
-		fmt.Println("  ", a)
-	}
+	defer lan.Close()
+
+	fmt.Printf("serving as %s on this network\n", identity.Short(h.ID().String()))
+	fmt.Println("waiting. ctrl-c to stop.")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -123,29 +135,72 @@ func devListen() error {
 	return nil
 }
 
-func devDial(addr string) error {
-	id, err := identity.LoadOrCreate()
-	if err != nil {
-		return err
-	}
-	h, err := transport.New(id.PrivateKey())
+// discover lists what is on this network. It needs no server and no
+// Internet: everything here is mDNS on the local link.
+func discover(full bool) error {
+	h, err := start()
 	if err != nil {
 		return err
 	}
 	defer h.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	lan, err := discovery.Start(h.Host())
+	if err != nil {
+		return err
+	}
+	defer lan.Close()
+
+	time.Sleep(lanTimeout)
+
+	peers := lan.Peers()
+	if len(peers) == 0 {
+		fmt.Println("no machines found on this network")
+		return nil
+	}
+	for _, p := range peers {
+		fmt.Printf("%s  local network\n", identity.Short(p.ID.String()))
+		if full {
+			fmt.Println("  ", p.ID)
+			for _, a := range p.Addrs {
+				fmt.Println("   ", a)
+			}
+		}
+	}
+	return nil
+}
+
+// connect finds a machine on the local network and opens a stream to it.
+// The dial carries no relay address, so a failure here is a real failure
+// rather than a quiet trip through heimdall.
+func connect(want string) error {
+	h, err := start()
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+
+	lan, err := discovery.Start(h.Host())
+	if err != nil {
+		return err
+	}
+	defer lan.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), lanTimeout)
 	defer cancel()
 
-	s, err := h.Dial(ctx, addr, transport.EchoProto)
+	info, err := lan.Find(ctx, want)
+	if err != nil {
+		return err
+	}
+
+	s, err := h.DialPeer(ctx, info, transport.EchoProto)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 
 	c := transport.Describe(s.Conn())
-	fmt.Printf("connected to %s over %s (%s) at %s\n",
-		c.Peer, c.Transport, c.Path, c.Addr)
+	fmt.Printf("connected to %s over %s\n", identity.Short(c.Peer.String()), c.Path)
 
 	const msg = "ratatoskr says hello\n"
 	if _, err := io.WriteString(s, msg); err != nil {
@@ -154,7 +209,6 @@ func devDial(addr string) error {
 	if err := s.CloseWrite(); err != nil {
 		return fmt.Errorf("half close: %w", err)
 	}
-
 	back, err := bufio.NewReader(s).ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
@@ -162,6 +216,6 @@ func devDial(addr string) error {
 	if back != msg {
 		return fmt.Errorf("echo mismatch: sent %q, got %q", msg, back)
 	}
-	fmt.Printf("echo ok: %q\n", back)
+	fmt.Println("link is good")
 	return nil
 }

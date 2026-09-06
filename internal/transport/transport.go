@@ -77,6 +77,11 @@ func New(key crypto.PrivKey) (*Host, error) {
 	return &Host{h: h}, nil
 }
 
+// Host exposes the libp2p host to packages that need to attach to it,
+// such as discovery. Nothing above the transport layer should reach for
+// this; it is here because mDNS advertises the host itself.
+func (t *Host) Host() host.Host { return t.h }
+
 // ID is this peer's identity, derived from its public key.
 func (t *Host) ID() peer.ID { return t.h.ID() }
 
@@ -104,7 +109,28 @@ func (t *Host) Dial(ctx context.Context, addr string, p protocol.ID) (network.St
 	if err != nil {
 		return nil, fmt.Errorf("address names no peer: %w", err)
 	}
-	if err := t.h.Connect(ctx, *info); err != nil {
+	return t.DialPeer(ctx, *info, p)
+}
+
+// DialPeer opens a stream to an already-located peer.
+//
+// Circuit addresses are dropped from the dial set. A peer found on the
+// local network must be reached over the local network or not at all —
+// silently relaying through heimdall would send bytes off a network the
+// user believed they never left. PLAN.md §6.
+func (t *Host) DialPeer(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
+	direct := info.Addrs[:0:0]
+	for _, a := range info.Addrs {
+		if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err != nil {
+			direct = append(direct, a)
+		}
+	}
+	if len(direct) == 0 {
+		return nil, fmt.Errorf("no direct address for %s", info.ID)
+	}
+	info.Addrs = direct
+
+	if err := t.h.Connect(ctx, info); err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	s, err := t.h.NewStream(ctx, info.ID, p)

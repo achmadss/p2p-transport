@@ -47,12 +47,14 @@ func (i *Identity) ID() peer.ID { return i.id }
 // id is what the trust list stores and what the handshake proves. Eight
 // characters would be far too few to resist a deliberate collision, and
 // it is never asked to.
-func (i *Identity) Fingerprint() string {
-	s := i.id.String()
-	if len(s) < 8 {
-		return s
+func (i *Identity) Fingerprint() string { return Short(i.id.String()) }
+
+// Short is Fingerprint's rule, for peer ids that are not ours.
+func Short(id string) string {
+	if len(id) < 8 {
+		return id
 	}
-	t := s[len(s)-8:]
+	t := id[len(id)-8:]
 	return t[:4] + "-" + t[4:]
 }
 
