@@ -22,10 +22,8 @@ A hole punch survives all three, so a probe that gets nothing back at
 all is the interesting result: it means this NAT is dropping inbound UDP
 on a mapping it just created, and no amount of coordination opens it.
 """
-import os, socket, sys, time, select
+import os, socket, sys, threading, time, select
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from punch import ask, SERVERS  # one reflector probe, shared with punch.py
 
 
 def reflect(port):
@@ -39,8 +37,11 @@ def reflect(port):
         print("probe from %s:%d" % addr, flush=True)
         a.sendto(b"SAME-PORT", addr)          # the port they wrote to
         b.sendto(b"OTHER-PORT", addr)         # a second port, same host
-        time.sleep(1.0)
-        b.sendto(b"OTHER-PORT-LATE", addr)    # again, after the mapping settles
+        # The late reply goes on a timer rather than a sleep. A prober
+        # that sends several times a second would otherwise queue behind
+        # this loop, and a reflector that answers slowly reads as a NAT
+        # that drops.
+        threading.Timer(1.0, b.sendto, (b"OTHER-PORT-LATE", addr)).start()
 
 
 def probe(host, port, seconds):
@@ -55,6 +56,12 @@ def probe(host, port, seconds):
     # other side records what this socket really looks like from a third
     # address. Endpoint-independent mapping means the two agree, and if
     # they do not, every published address is a lie and no punch can land.
+    # Imported here, not at the top: the reflector runs on a host that
+    # needs no STUN and should not fail to start because punch.py is not
+    # sitting beside it.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from punch import ask, SERVERS
+
     mapped = None
     for name, sp in SERVERS:
         try:
