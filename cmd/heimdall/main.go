@@ -13,17 +13,48 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/achmadss/ratatoskr/internal/config"
 	"github.com/achmadss/ratatoskr/internal/identity"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+	"github.com/multiformats/go-multiaddr"
 )
 
-// port is fixed, unlike the agent's. A relay is dialled by an address
-// written down somewhere, so it cannot move.
-const port = 4001
+func toMultiaddrs(in []string) ([]multiaddr.Multiaddr, error) {
+	out := make([]multiaddr.Multiaddr, 0, len(in))
+	for _, a := range in {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			return nil, fmt.Errorf("HEIMDALL_ANNOUNCE: bad address %q: %w", a, err)
+		}
+		out = append(out, ma)
+	}
+	return out, nil
+}
+
+// Defaults. Every one is overridable; see usage below.
+const (
+	defaultPort     = 4001
+	defaultData     = 64 << 30
+	defaultDuration = time.Hour
+)
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+		fmt.Print(`usage: heimdall
+
+environment (empty means the default):
+  RATATOSKR_CONFIG_DIR       where identity.key lives
+  HEIMDALL_PORT              listen port, UDP and TCP          (4001)
+  HEIMDALL_ANNOUNCE          comma-separated public multiaddrs to
+                             advertise instead of what the machine
+                             sees. Needed behind a cloud NAT.
+  HEIMDALL_CIRCUIT_DATA      bytes per circuit, K/M/G suffixes  (64G)
+  HEIMDALL_CIRCUIT_DURATION  lifetime per circuit               (1h)
+`)
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "heimdall:", err)
 		os.Exit(1)
@@ -36,13 +67,30 @@ func run() error {
 		return err
 	}
 
-	h, err := libp2p.New(
+	port := config.Int("HEIMDALL_PORT", defaultPort)
+
+	opts := []libp2p.Option{
 		libp2p.Identity(id.PrivateKey()),
 		libp2p.ListenAddrStrings(
 			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port),
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port),
 		),
-	)
+	}
+
+	// A relay behind a cloud provider's NAT sees only its private
+	// address, and announcing that would tell every agent to dial an
+	// address that reaches nothing. HEIMDALL_ANNOUNCE is the public one.
+	if announce := config.List("HEIMDALL_ANNOUNCE"); len(announce) > 0 {
+		addrs, err := toMultiaddrs(announce)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, libp2p.AddrsFactory(func([]multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			return addrs
+		}))
+	}
+
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return fmt.Errorf("start host: %w", err)
 	}
@@ -56,7 +104,10 @@ func run() error {
 	// ponytail: one limit for everyone. Per-account limits and metering
 	// are step 11, and need mimir to have accounts to meter.
 	res := relay.DefaultResources()
-	res.Limit = &relay.RelayLimit{Duration: time.Hour, Data: 64 << 30}
+	res.Limit = &relay.RelayLimit{
+		Duration: config.Duration("HEIMDALL_CIRCUIT_DURATION", defaultDuration),
+		Data:     config.Bytes("HEIMDALL_CIRCUIT_DATA", defaultData),
+	}
 	if _, err := relay.New(h, relay.WithResources(res)); err != nil {
 		return fmt.Errorf("start relay: %w", err)
 	}

@@ -26,25 +26,24 @@ import (
 
 const version = "0.0.1"
 
-// lanTimeout is how long a command waits for mDNS. Answers arrive in
-// milliseconds on a working network; this is the give-up point.
-const lanTimeout = 3 * time.Second
-
-// lanHeadStart is how long `--via auto` waits for the local network
-// before trying the relay. PLAN.md §6.
-const lanHeadStart = 400 * time.Millisecond
-
-// dialTimeout covers the whole attempt. A relayed dial has a reservation
-// and a hole punch to get through first, so it needs far longer than the
-// local network does.
-const dialTimeout = 30 * time.Second
-
-// benchTimeout covers a whole measurement, which moves real bytes.
-const benchTimeout = 10 * time.Minute
-
-// punchWindow is how long a relayed connection is watched for a DCUtR
-// upgrade before the punch is called a failure.
-const punchWindow = 30 * time.Second
+// Defaults for the timings. Every one is overridable; see usage below.
+//
+//	lanTimeout    how long a command waits for mDNS. Answers arrive in
+//	              milliseconds on a working network; this is giving up.
+//	lanHeadStart  how long --via auto waits for the LAN before trying
+//	              the relay. PLAN.md §6.
+//	dialTimeout   the whole attempt. A relayed dial has a reservation
+//	              and a hole punch to get through first.
+//	benchTimeout  a whole measurement, which moves real bytes.
+//	punchWindow   how long a relayed connection is watched for a DCUtR
+//	              upgrade before the punch is called a failure.
+var (
+	lanTimeout   = config.Duration("RATATOSKR_LAN_TIMEOUT", 3*time.Second)
+	lanHeadStart = config.Duration("RATATOSKR_LAN_HEAD_START", 400*time.Millisecond)
+	dialTimeout  = config.Duration("RATATOSKR_DIAL_TIMEOUT", 30*time.Second)
+	benchTimeout = config.Duration("RATATOSKR_BENCH_TIMEOUT", 10*time.Minute)
+	punchWindow  = config.Duration("RATATOSKR_PUNCH_WINDOW", 30*time.Second)
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -96,6 +95,16 @@ func usage() {
                        connect to a machine by id or fingerprint
   bench ID [--via ...] [--mb N]
                        measure throughput to a machine, default 100 MB
+
+environment (empty means the default):
+  RATATOSKR_CONFIG_DIR      where identity.key and config.json live
+  RATATOSKR_RELAYS          comma-separated relays, overriding config.json
+  RATATOSKR_LAN_TIMEOUT     wait for mDNS                        (3s)
+  RATATOSKR_LAN_HEAD_START  --via auto's LAN head start          (400ms)
+  RATATOSKR_DIAL_TIMEOUT    whole connect attempt                (30s)
+  RATATOSKR_BENCH_TIMEOUT   whole benchmark                      (10m)
+  RATATOSKR_PUNCH_WINDOW    wait for a hole punch                (30s)
+  RATATOSKR_BENCH_MB        default benchmark size               (100)
 `)
 }
 
@@ -142,7 +151,11 @@ func start() (*transport.Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	return transport.New(id.PrivateKey(), cfg.Relays)
+	relays := cfg.Relays
+	if env := config.List("RATATOSKR_RELAYS"); len(env) > 0 {
+		relays = env
+	}
+	return transport.New(id.PrivateKey(), relays)
 }
 
 // run serves this machine. Until the File API lands it answers the echo
@@ -185,7 +198,7 @@ func run() error {
 	defer lan.Close()
 
 	fmt.Printf("serving as %s on this network\n", identity.Short(h.ID().String()))
-	if len(cfg.Relays) > 0 {
+	if len(cfg.Relays) > 0 || len(config.List("RATATOSKR_RELAYS")) > 0 {
 		fmt.Printf("from another network, connect to:\n   %s\n", h.ID())
 	}
 	fmt.Println("waiting. ctrl-c to stop.")
@@ -324,6 +337,9 @@ func dialRelay(ctx context.Context, h *transport.Host, want string, proto protoc
 	if err != nil {
 		return nil, err
 	}
+	if env := config.List("RATATOSKR_RELAYS"); len(env) > 0 {
+		cfg.Relays = env
+	}
 	if len(cfg.Relays) == 0 {
 		return nil, fmt.Errorf("no machine matching %q on this network, and no relay configured", want)
 	}
@@ -353,7 +369,7 @@ func size(args []string) int64 {
 			}
 		}
 	}
-	return 100
+	return int64(config.Int("RATATOSKR_BENCH_MB", 100))
 }
 
 // bench measures a path and watches for a hole punch. These are the
