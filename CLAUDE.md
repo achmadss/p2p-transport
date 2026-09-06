@@ -60,6 +60,21 @@ has no `--via` flag yet, because LAN is the only path that exists.
 load-bearing, not tidiness: a peer found on the LAN must be reached on
 the LAN or not at all.
 
+**TODO step 3 is half done.** `cmd/heimdall` is a circuit relay v2 node.
+The agent enables AutoNAT, DCUtR and the relay client when `config.json`
+names a relay, and `connect --via lan|relay|auto` picks a path — `auto`
+gives the LAN a 400 ms head start, per `PLAN.md` §6. All of it is
+verified on loopback only. The measurements that justify libp2p need
+heimdall on a real VPS and are still missing.
+
+Three traps this step exposed. libp2p marks a relayed connection
+*limited* and refuses streams on it unless the dial passes
+`network.WithAllowLimitedConn`. AutoNAT will not take a reservation when
+it thinks it is reachable, so `RATATOSKR_FORCE_PRIVATE=1` forces the
+relay path for testing and must never be set in production. And a
+circuit address does not appear in `host.Addrs()` on loopback, so `run`
+prints the peer id to copy rather than an address it cannot promise.
+
 Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands

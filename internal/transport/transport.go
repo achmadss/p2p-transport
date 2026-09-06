@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 
 	"github.com/libp2p/go-libp2p"
@@ -63,14 +64,37 @@ type Host struct {
 // libp2p's defaults. The defaults would also enable WebTransport and TLS,
 // and which transports exist is a decision of PLAN.md §4, not something
 // to inherit from a dependency's default and discover later.
-func New(key crypto.PrivKey) (*Host, error) {
-	h, err := libp2p.New(
+// Relays are heimdall addresses. With none the host is LAN-only, which
+// is a complete way to run and not a degraded one.
+func New(key crypto.PrivKey, relays []string) (*Host, error) {
+	infos, err := ParseAddrs(relays)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := []libp2p.Option{
 		libp2p.Identity(key),
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Transport(quic.NewTransport),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
-	)
+		// AutoNAT learns whether we are reachable; DCUtR turns a relayed
+		// connection into a direct one when both ends can be punched
+		// through. Both are why the relay is a fallback and not a bill.
+		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching(),
+	}
+	if len(infos) > 0 {
+		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(infos))
+	}
+	// AutoNAT decides whether a relay reservation is needed, and on a
+	// loopback test it correctly decides no. This forces the answer so
+	// the relay path can be exercised without two real networks.
+	if os.Getenv("RATATOSKR_FORCE_PRIVATE") != "" {
+		opts = append(opts, libp2p.ForceReachabilityPrivate())
+	}
+
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
@@ -81,6 +105,24 @@ func New(key crypto.PrivKey) (*Host, error) {
 // such as discovery. Nothing above the transport layer should reach for
 // this; it is here because mDNS advertises the host itself.
 func (t *Host) Host() host.Host { return t.h }
+
+// ParseAddrs turns full multiaddrs into peer records, failing on the
+// first bad one rather than quietly dropping it.
+func ParseAddrs(addrs []string) ([]peer.AddrInfo, error) {
+	var out []peer.AddrInfo
+	for _, a := range addrs {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			return nil, fmt.Errorf("bad address %q: %w", a, err)
+		}
+		info, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			return nil, fmt.Errorf("address %q names no peer: %w", a, err)
+		}
+		out = append(out, *info)
+	}
+	return out, nil
+}
 
 // ID is this peer's identity, derived from its public key.
 func (t *Host) ID() peer.ID { return t.h.ID() }
@@ -129,11 +171,24 @@ func (t *Host) DialPeer(ctx context.Context, info peer.AddrInfo, p protocol.ID) 
 		return nil, fmt.Errorf("no direct address for %s", info.ID)
 	}
 	info.Addrs = direct
+	return t.dial(ctx, info, p)
+}
 
+// DialRelayed reaches a peer through a relay. The caller has chosen to
+// leave the local network, so circuit addresses are kept.
+func (t *Host) DialRelayed(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
+	return t.dial(ctx, info, p)
+}
+
+func (t *Host) dial(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
 	if err := t.h.Connect(ctx, info); err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
-	s, err := t.h.NewStream(ctx, info.ID, p)
+	// libp2p treats a relayed connection as limited and refuses streams
+	// on it unless asked. Ratatoskr wants them: a relayed path is slow
+	// and metered, but it is a working path, and the alternative is no
+	// connection at all.
+	s, err := t.h.NewStream(network.WithAllowLimitedConn(ctx, "ratatoskr"), info.ID, p)
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
 	}

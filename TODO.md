@@ -40,7 +40,7 @@ the Noise handshake.
 - [x] `ratatoskr id`
 - [x] Tests: id stable across restarts; a corrupt key file fails loudly
 
-**Done 2026-09-06** on macOS; Windows and Linux still to run. The
+**Done 2026-09-06** on macOS and Windows; Linux still to run. The
 permission check is skipped on Windows, whose Unix mode bits are
 synthetic — ACLs are a separate piece of work, not done here.
 
@@ -65,7 +65,11 @@ authorisation work.
       flag yet: LAN is the only path that exists, so a flag choosing
       between one option would be a lie. It arrives with step 3
 - [x] Re-advertise when the network interface changes
-- [ ] Test on macOS, Windows and Linux; record every firewall prompt
+- [x] macOS and Windows. Linux still to run
+- [ ] Firewall prompts: macOS asks once on `run`, Windows asks once and
+      allowing it is enough. Windows also logs `mdns failed to set
+      multicast interface ... udp6 [::]:5353` on startup; IPv4 multicast
+      still works and discovery succeeds, so it is noise, not a failure
 - [ ] Test with the router's uplink physically unplugged
 
 **Check:** two machines find and connect to each other with no server and
@@ -78,9 +82,9 @@ no Internet.
 The step that can genuinely fail, and the one that proves the libp2p
 choice. Do it before anything depends on the answer.
 
-- [ ] `cmd/heimdall`: libp2p node with circuit relay v2 hop enabled
+- [x] `cmd/heimdall`: libp2p node with circuit relay v2 hop enabled
 - [ ] Deploy it to a VPS with a public address
-- [ ] Agent: enable AutoNAT, relay client, and DCUtR hole punching
+- [x] Agent: enable AutoNAT, relay client, and DCUtR hole punching
 - [ ] Agent takes a relay reservation and prints its circuit multiaddr
 - [ ] Dial that circuit address from a different network
 - [ ] Log whether the connection stayed relayed or upgraded to direct,
@@ -89,7 +93,21 @@ choice. Do it before anything depends on the answer.
       and MB/s on a 1 Gbps LAN and over the Internet
 - [ ] Test: home Wi-Fi to phone hotspot; macOS↔Windows↔Linux; both peers
       behind the same NAT
-- [ ] Serve over the relay immediately, upgrade in the background
+- [x] Serve over the relay immediately, upgrade in the background
+
+**Code is done, the measurement is not.** heimdall relays, the agent
+takes a reservation, and `connect --via lan|relay|auto` works: verified
+on loopback with three processes, where `auto` chose the LAN and
+`--via relay` was reported as `relay` at both ends. Loopback proves the
+plumbing and nothing about NAT, which is the whole point of the step,
+so the remaining boxes stay open until heimdall runs on the VPS.
+
+Two things loopback taught anyway. A relayed connection is *limited* in
+libp2p and refuses streams unless the dial opts in, which is why the
+first relayed attempt hung rather than failed. And AutoNAT correctly
+declines to reserve when it believes it is reachable, so
+`RATATOSKR_FORCE_PRIVATE=1` exists to force the relay path in testing
+and must never be set in production.
 
 **Check:** two machines on different networks connect, and the numbers
 exist on paper. If throughput or punch rate is bad, stop and reconsider

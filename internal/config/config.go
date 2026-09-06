@@ -100,12 +100,16 @@ type Config struct {
 	Shares  []Share           `json:"shares"`
 	Trusted []Peer            `json:"trusted"`
 	Aliases map[string]string `json:"aliases"` // alias -> peer id
+
+	// Relays are heimdall nodes, as full multiaddrs. Empty means LAN
+	// only, which is a complete and supported way to run.
+	Relays []string `json:"relays"`
 }
 
 // Default is what a first run writes: nothing shared, nobody trusted.
 // Sharing is opted into, never inherited from a default.
 func Default() *Config {
-	return &Config{Version: 1, Shares: []Share{}, Trusted: []Peer{}, Aliases: map[string]string{}}
+	return &Config{Version: 1, Shares: []Share{}, Trusted: []Peer{}, Aliases: map[string]string{}, Relays: []string{}}
 }
 
 const fileName = "config.json"

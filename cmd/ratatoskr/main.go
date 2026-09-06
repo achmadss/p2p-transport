@@ -17,6 +17,8 @@ import (
 	"github.com/achmadss/ratatoskr/internal/identity"
 	"github.com/achmadss/ratatoskr/internal/transport"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 const version = "0.0.1"
@@ -24,6 +26,15 @@ const version = "0.0.1"
 // lanTimeout is how long a command waits for mDNS. Answers arrive in
 // milliseconds on a working network; this is the give-up point.
 const lanTimeout = 3 * time.Second
+
+// lanHeadStart is how long `--via auto` waits for the local network
+// before trying the relay. PLAN.md §6.
+const lanHeadStart = 400 * time.Millisecond
+
+// dialTimeout covers the whole attempt. A relayed dial has a reservation
+// and a hole punch to get through first, so it needs far longer than the
+// local network does.
+const dialTimeout = 30 * time.Second
 
 func main() {
 	if len(os.Args) < 2 {
@@ -47,7 +58,7 @@ func main() {
 			err = fmt.Errorf("connect needs a machine id or fingerprint")
 			break
 		}
-		err = connect(args[0])
+		err = connect(args[0], via(args[1:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -65,7 +76,8 @@ func usage() {
   id [--full]          print this machine's identity
   run                  serve this machine on the local network
   discover [--full]    list Ratatoskr machines on this network
-  connect ID           connect to a machine by id or fingerprint
+  connect ID [--via lan|relay|auto]
+                       connect to a machine by id or fingerprint
 `)
 }
 
@@ -91,19 +103,38 @@ func showID(full bool) error {
 	return nil
 }
 
-// start brings up this machine's host under its stored identity.
+// via reads --via. auto is LAN first, then the relay.
+func via(args []string) string {
+	for i, a := range args {
+		if a == "--via" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return "auto"
+}
+
+// start brings up this machine's host under its stored identity and any
+// relays its config names.
 func start() (*transport.Host, error) {
 	id, err := identity.LoadOrCreate()
 	if err != nil {
 		return nil, err
 	}
-	return transport.New(id.PrivateKey())
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	return transport.New(id.PrivateKey(), cfg.Relays)
 }
 
 // run serves this machine. Until the File API lands it answers the echo
 // protocol only, which is enough to prove a peer reached us and over
 // which path.
 func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	h, err := start()
 	if err != nil {
 		return err
@@ -126,6 +157,9 @@ func run() error {
 	defer lan.Close()
 
 	fmt.Printf("serving as %s on this network\n", identity.Short(h.ID().String()))
+	if len(cfg.Relays) > 0 {
+		fmt.Printf("from another network, connect to:\n   %s\n", h.ID())
+	}
 	fmt.Println("waiting. ctrl-c to stop.")
 
 	stop := make(chan os.Signal, 1)
@@ -172,7 +206,7 @@ func discover(full bool) error {
 // connect finds a machine on the local network and opens a stream to it.
 // The dial carries no relay address, so a failure here is a real failure
 // rather than a quiet trip through heimdall.
-func connect(want string) error {
+func connect(want, path string) error {
 	h, err := start()
 	if err != nil {
 		return err
@@ -185,15 +219,10 @@ func connect(want string) error {
 	}
 	defer lan.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), lanTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
 
-	info, err := lan.Find(ctx, want)
-	if err != nil {
-		return err
-	}
-
-	s, err := h.DialPeer(ctx, info, transport.EchoProto)
+	s, err := open(ctx, h, lan, want, path)
 	if err != nil {
 		return err
 	}
@@ -218,4 +247,70 @@ func connect(want string) error {
 	}
 	fmt.Println("link is good")
 	return nil
+}
+
+// open picks a path to the far end. LAN gets a head start because a
+// machine on this network should be reached on this network: nothing
+// leaves it, and it is faster. The relay is the fallback, never the
+// first choice. PLAN.md §6.
+func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path string) (network.Stream, error) {
+	switch path {
+	case "lan", "relay", "auto":
+	default:
+		return nil, fmt.Errorf("--via must be lan, relay or auto, not %q", path)
+	}
+
+	if path != "relay" {
+		wait := lanTimeout
+		if path == "auto" {
+			wait = lanHeadStart
+		}
+		head, cancel := context.WithTimeout(ctx, wait)
+		info, err := lan.Find(head, want)
+		cancel()
+
+		switch {
+		case err == nil:
+			s, dialErr := h.DialPeer(ctx, info, transport.EchoProto)
+			if dialErr == nil {
+				return s, nil
+			}
+			// Found but unreachable is a fallback trigger, not a dead
+			// end: the peer may have moved networks mid-announcement.
+			if path == "lan" {
+				return nil, dialErr
+			}
+		case path == "lan":
+			return nil, err
+		}
+	}
+
+	return dialRelay(ctx, h, want)
+}
+
+// dialRelay reaches a machine through heimdall. Discovering its address
+// is mimir's job, which does not exist yet, so the circuit address is
+// built from a configured relay plus a full peer id.
+func dialRelay(ctx context.Context, h *transport.Host, want string) (network.Stream, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Relays) == 0 {
+		return nil, fmt.Errorf("no machine matching %q on this network, and no relay configured", want)
+	}
+	id, err := peer.Decode(want)
+	if err != nil {
+		return nil, fmt.Errorf("no machine matching %q on this network, and a relay connection needs the full machine id rather than a fingerprint", want)
+	}
+
+	var addrs []multiaddr.Multiaddr
+	for _, r := range cfg.Relays {
+		a, err := multiaddr.NewMultiaddr(r + "/p2p-circuit")
+		if err != nil {
+			return nil, fmt.Errorf("bad relay %q: %w", r, err)
+		}
+		addrs = append(addrs, a)
+	}
+	return h.DialRelayed(ctx, peer.AddrInfo{ID: id, Addrs: addrs}, transport.EchoProto)
 }
