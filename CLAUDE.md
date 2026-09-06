@@ -25,13 +25,17 @@ their devices. Three binaries, one Go module:
 
 ## Current state
 
-**The repo holds a retired prototype.** `cmd/ratatoskr/main.go` and
-`internal/transport/transport.go` are a Pion WebRTC echo test from the
-original step 0. The transport decision has since moved to libp2p
-(`PLAN.md` §4), so this code and the Pion dependencies in `go.mod` are
-replaced by TODO step 0, not extended.
+**TODO step 0 is done.** `internal/transport` is a libp2p host with QUIC
+and TCP, Noise security and an Ed25519 identity; `cmd/ratatoskr` has
+`dev-listen` and `dev-dial` speaking `/ratatoskr/echo/1.0.0`. The Pion
+prototype and its dependencies are gone.
 
-Nothing else in `PLAN.md`'s package layout exists yet.
+Those two dev subcommands are scaffolding. They exist to prove a stream
+carries bytes, and they are deleted once `run` and `connect` (`PLAN.md`
+§16) replace them — do not build features on them.
+
+The identity is generated per process and discarded on exit. Step 1 gives
+it a home on disk. Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands
 

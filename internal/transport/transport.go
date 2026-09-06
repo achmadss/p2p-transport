@@ -1,207 +1,214 @@
-// Package transport wraps Pion WebRTC. It owns peer connection setup, the
-// control DataChannel, and the answer to "did this end up direct or relayed".
+// Package transport carries Ratatoskr's bytes between two peers.
 //
-// Nothing above this package should import pion directly.
+// It is built on libp2p. The Noise handshake proves who the remote peer
+// is, so there is no separate challenge-response here; see PLAN.md §5.
+// What a proven peer may then read is a question for the trust list and
+// for mimir-signed grants, and is decided a layer above this one.
 package transport
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"errors"
+	"crypto/rand"
 	"fmt"
-	"sync"
+	"strings"
 
-	"github.com/pion/webrtc/v4"
+	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
+	"github.com/multiformats/go-multiaddr"
 )
 
-// CtrlLabel is the DataChannel that carries JSON requests and replies.
-// File bytes travel on separate "xfer-<id>" channels, added in step 4.
-const CtrlLabel = "ctrl"
+// EchoProto is the step 0 scaffold. It exists to prove a Noise-secured
+// QUIC stream carries bytes end to end, and is deleted once the real
+// control and transfer protocols of PLAN.md §9 replace it.
+const EchoProto = protocol.ID("/ratatoskr/echo/1.0.0")
 
-// DefaultICEServers is the STUN set used until heimdall hands out its own.
-func DefaultICEServers() []webrtc.ICEServer {
-	return []webrtc.ICEServer{
-		{URLs: []string{"stun:stun.l.google.com:19302"}},
-		{URLs: []string{"stun:stun.cloudflare.com:3478"}},
-	}
-}
-
-// Path is how the two peers ended up talking to each other.
+// Path is how a session reached the far end. It is measured from a live
+// connection, never guessed. PLAN.md §14.
 type Path string
 
 const (
 	PathUnknown Path = "unknown"
+	PathLAN     Path = "lan"
 	PathDirect  Path = "direct"
 	PathRelay   Path = "relay"
 )
 
-// Conn is one WebRTC connection to one peer.
+// Options configures a Host. The zero value listens on an
+// operating-system-assigned port on every interface, over both QUIC and
+// TCP, and generates a throwaway identity.
+type Options struct {
+	// Key is this peer's long-lived private key. When nil a new Ed25519
+	// key is generated and discarded on exit, which is what the dev
+	// commands want and what step 1 replaces.
+	Key crypto.PrivKey
+
+	// ListenAddrs overrides the default listen set.
+	ListenAddrs []string
+}
+
+func (o Options) listenAddrs() []string {
+	if len(o.ListenAddrs) > 0 {
+		return o.ListenAddrs
+	}
+	return []string{
+		"/ip4/0.0.0.0/udp/0/quic-v1",
+		"/ip6/::/udp/0/quic-v1",
+		"/ip4/0.0.0.0/tcp/0",
+		"/ip6/::/tcp/0",
+	}
+}
+
+// Host is a libp2p node in either role. Ratatoskr is one binary that
+// serves and consumes, so there is no separate client type.
+type Host struct {
+	h host.Host
+}
+
+// New starts a host. QUIC is listed first so it is preferred; TCP is the
+// fallback for networks that drop UDP.
+func New(opts Options) (*Host, error) {
+	key := opts.Key
+	if key == nil {
+		var err error
+		key, _, err = crypto.GenerateEd25519Key(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate identity: %w", err)
+		}
+	}
+
+	h, err := libp2p.New(
+		libp2p.Identity(key),
+		libp2p.ListenAddrStrings(opts.listenAddrs()...),
+		libp2p.Transport(quic.NewTransport),
+		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.Security(noise.ID, noise.New),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("start host: %w", err)
+	}
+	return &Host{h: h}, nil
+}
+
+// ID is this peer's identity, derived from its public key.
+func (t *Host) ID() peer.ID { return t.h.ID() }
+
+// Addrs are the full multiaddrs a remote peer can dial, identity
+// included. Diagnostics only: SPEC.md §30.4 keeps multiaddrs out of
+// ordinary user-facing output.
+func (t *Host) Addrs() []string {
+	var out []string
+	for _, a := range t.h.Addrs() {
+		out = append(out, a.String()+"/p2p/"+t.h.ID().String())
+	}
+	return out
+}
+
+// Handle registers a handler for a protocol.
+func (t *Host) Handle(p protocol.ID, fn network.StreamHandler) {
+	t.h.SetStreamHandler(p, fn)
+}
+
+// Dial connects to a peer named by a full multiaddr and opens a stream.
+// The Noise handshake inside proves the far end holds the private key
+// for the peer id in that address; a mismatch fails the dial.
+func (t *Host) Dial(ctx context.Context, addr string, p protocol.ID) (network.Stream, error) {
+	ma, err := multiaddr.NewMultiaddr(addr)
+	if err != nil {
+		return nil, fmt.Errorf("bad address: %w", err)
+	}
+	info, err := peer.AddrInfoFromP2pAddr(ma)
+	if err != nil {
+		return nil, fmt.Errorf("address names no peer: %w", err)
+	}
+	if err := t.h.Connect(ctx, *info); err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	s, err := t.h.NewStream(ctx, info.ID, p)
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	return s, nil
+}
+
+func (t *Host) Close() error { return t.h.Close() }
+
+// Conn describes one live connection, as measured.
 type Conn struct {
-	pc *webrtc.PeerConnection
-
-	// Ctrl is closed-over by CtrlReady: read it only after CtrlReady fires.
-	Ctrl *webrtc.DataChannel
-
-	// CtrlReady closes once Ctrl is open and usable.
-	CtrlReady chan struct{}
-
-	// Closed closes when the peer connection fails or disconnects.
-	Closed chan struct{}
-
-	ctrlOnce   sync.Once
-	closedOnce sync.Once
+	Peer      peer.ID
+	Addr      string
+	Transport string // quic | tcp | ws
+	Path      Path
 }
 
-// New builds a peer connection that has not been offered or answered yet.
-func New(ice []webrtc.ICEServer) (*Conn, error) {
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: ice})
-	if err != nil {
-		return nil, fmt.Errorf("new peer connection: %w", err)
+// Describe reports how a connection actually reached its far end. It
+// reads the live connection rather than the intent that opened it,
+// because presence and path are different questions. PLAN.md §14.
+func Describe(c network.Conn) Conn {
+	addr := c.RemoteMultiaddr()
+	return Conn{
+		Peer:      c.RemotePeer(),
+		Addr:      addr.String(),
+		Transport: transportOf(addr),
+		Path:      pathOf(addr),
 	}
+}
 
-	c := &Conn{pc: pc, CtrlReady: make(chan struct{}), Closed: make(chan struct{})}
+func transportOf(a multiaddr.Multiaddr) string {
+	s := a.String()
+	switch {
+	case strings.Contains(s, "/quic"):
+		return "quic"
+	case strings.Contains(s, "/ws"), strings.Contains(s, "/wss"):
+		return "ws"
+	case strings.Contains(s, "/tcp"):
+		return "tcp"
+	}
+	return "unknown"
+}
 
-	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		switch s {
-		case webrtc.PeerConnectionStateFailed,
-			webrtc.PeerConnectionStateDisconnected,
-			webrtc.PeerConnectionStateClosed:
-			c.closedOnce.Do(func() { close(c.Closed) })
+func pathOf(a multiaddr.Multiaddr) Path {
+	if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+		return PathRelay
+	}
+	ip, err := a.ValueForProtocol(multiaddr.P_IP4)
+	if err != nil {
+		if ip, err = a.ValueForProtocol(multiaddr.P_IP6); err != nil {
+			return PathUnknown
 		}
-	})
-
-	// The answering side receives the channel rather than creating it.
-	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		if dc.Label() != CtrlLabel {
-			return
-		}
-		c.Ctrl = dc
-		dc.OnOpen(func() { c.ctrlOnce.Do(func() { close(c.CtrlReady) }) })
-	})
-
-	return c, nil
+	}
+	if isPrivate(ip) {
+		return PathLAN
+	}
+	return PathDirect
 }
 
-// Offer creates the control channel and returns an encoded SDP offer.
-//
-// ICE gathering runs to completion before returning, so the offer carries
-// every candidate. That keeps step 0 to a single paste in each direction.
-// Trickle ICE arrives with heimdall in step 1.
-func (c *Conn) Offer(ctx context.Context) (string, error) {
-	dc, err := c.pc.CreateDataChannel(CtrlLabel, nil)
-	if err != nil {
-		return "", fmt.Errorf("create %s channel: %w", CtrlLabel, err)
-	}
-	c.Ctrl = dc
-	dc.OnOpen(func() { c.ctrlOnce.Do(func() { close(c.CtrlReady) }) })
-
-	offer, err := c.pc.CreateOffer(nil)
-	if err != nil {
-		return "", fmt.Errorf("create offer: %w", err)
-	}
-	return c.localAfterGathering(ctx, offer)
+func isPrivate(ip string) bool {
+	return strings.HasPrefix(ip, "10.") ||
+		strings.HasPrefix(ip, "192.168.") ||
+		strings.HasPrefix(ip, "127.") ||
+		strings.HasPrefix(ip, "169.254.") ||
+		strings.HasPrefix(ip, "fe80:") ||
+		strings.HasPrefix(ip, "fc") || strings.HasPrefix(ip, "fd") ||
+		ip == "::1" ||
+		isCarrierRange(ip)
 }
 
-// Answer consumes an encoded offer and returns an encoded answer.
-func (c *Conn) Answer(ctx context.Context, encodedOffer string) (string, error) {
-	offer, err := decode(encodedOffer)
-	if err != nil {
-		return "", fmt.Errorf("decode offer: %w", err)
+// 172.16.0.0/12 and 100.64.0.0/10, spelled out rather than parsed so the
+// check stays one function with no error path.
+func isCarrierRange(ip string) bool {
+	var a, b int
+	if n, _ := fmt.Sscanf(ip, "%d.%d.", &a, &b); n != 2 {
+		return false
 	}
-	if err := c.pc.SetRemoteDescription(offer); err != nil {
-		return "", fmt.Errorf("set remote offer: %w", err)
+	if a == 172 && b >= 16 && b <= 31 {
+		return true
 	}
-
-	answer, err := c.pc.CreateAnswer(nil)
-	if err != nil {
-		return "", fmt.Errorf("create answer: %w", err)
-	}
-	return c.localAfterGathering(ctx, answer)
-}
-
-// Accept consumes the encoded answer on the offering side.
-func (c *Conn) Accept(encodedAnswer string) error {
-	answer, err := decode(encodedAnswer)
-	if err != nil {
-		return fmt.Errorf("decode answer: %w", err)
-	}
-	if err := c.pc.SetRemoteDescription(answer); err != nil {
-		return fmt.Errorf("set remote answer: %w", err)
-	}
-	return nil
-}
-
-// Path reports how the connection was actually established, and a human
-// readable description of the winning candidate pair.
-//
-// This must come from the real selected pair, never from a guess, because the
-// relay rate is the number that decides what this system costs to run.
-func (c *Conn) Path() (Path, string) {
-	sctp := c.pc.SCTP()
-	if sctp == nil {
-		return PathUnknown, "no sctp transport"
-	}
-	dtls := sctp.Transport()
-	if dtls == nil {
-		return PathUnknown, "no dtls transport"
-	}
-	ice := dtls.ICETransport()
-	if ice == nil {
-		return PathUnknown, "no ice transport"
-	}
-	pair, err := ice.GetSelectedCandidatePair()
-	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
-		return PathUnknown, "no selected candidate pair"
-	}
-
-	kind := PathDirect
-	if pair.Local.Typ == webrtc.ICECandidateTypeRelay || pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
-		kind = PathRelay
-	}
-	desc := fmt.Sprintf("local %s %s:%d  <->  remote %s %s:%d",
-		pair.Local.Typ, pair.Local.Address, pair.Local.Port,
-		pair.Remote.Typ, pair.Remote.Address, pair.Remote.Port)
-	return kind, desc
-}
-
-func (c *Conn) Close() error { return c.pc.Close() }
-
-// localAfterGathering sets the local description and waits for ICE gathering
-// to finish, then returns the encoded full description.
-func (c *Conn) localAfterGathering(ctx context.Context, sd webrtc.SessionDescription) (string, error) {
-	done := webrtc.GatheringCompletePromise(c.pc)
-	if err := c.pc.SetLocalDescription(sd); err != nil {
-		return "", fmt.Errorf("set local description: %w", err)
-	}
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return "", fmt.Errorf("ice gathering: %w", ctx.Err())
-	}
-
-	local := c.pc.LocalDescription()
-	if local == nil {
-		return "", errors.New("no local description after gathering")
-	}
-	return encode(*local), nil
-}
-
-func encode(sd webrtc.SessionDescription) string {
-	b, err := json.Marshal(sd)
-	if err != nil {
-		// SessionDescription is two strings; marshalling it cannot fail.
-		panic(err)
-	}
-	return base64.StdEncoding.EncodeToString(b)
-}
-
-func decode(s string) (webrtc.SessionDescription, error) {
-	var sd webrtc.SessionDescription
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		return sd, err
-	}
-	err = json.Unmarshal(b, &sd)
-	return sd, err
+	return a == 100 && b >= 64 && b <= 127
 }

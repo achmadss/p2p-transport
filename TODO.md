@@ -12,13 +12,17 @@ Rule: do not start a step until the one above passes its check.
 Replaces the Pion echo. That code is retired: the transport decision
 moved to libp2p, and `internal/transport` is rebuilt on it.
 
-- [ ] Add `github.com/libp2p/go-libp2p`
-- [ ] Host with QUIC and TCP, Noise security, Ed25519 identity
-- [ ] Register `/ratatoskr/echo/1.0.0`
-- [ ] `ratatoskr dev-listen` prints its multiaddrs and waits
-- [ ] `ratatoskr dev-dial <multiaddr>` connects and echoes a string
-- [ ] Report the connection's transport, remote peer id and address
-- [ ] Confirm `CGO_ENABLED=0` still cross-builds every target
+- [x] Add `github.com/libp2p/go-libp2p`
+- [x] Host with QUIC and TCP, Noise security, Ed25519 identity
+- [x] Register `/ratatoskr/echo/1.0.0`
+- [x] `ratatoskr dev-listen` prints its multiaddrs and waits
+- [x] `ratatoskr dev-dial <multiaddr>` connects and echoes a string
+- [x] Report the connection's transport, remote peer id and address
+- [x] Confirm `CGO_ENABLED=0` still cross-builds every target
+
+**Done 2026-09-06.** Echoed over QUIC on loopback; the peer id in
+the dialled multiaddr was verified by the Noise handshake. All five
+targets cross-build with `CGO_ENABLED=0`.
 
 **Check:** the string comes back, over QUIC, with the peer id verified by
 the Noise handshake.

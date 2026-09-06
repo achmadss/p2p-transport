@@ -1,191 +1,128 @@
-// Command ratatoskr is the peer agent: it serves files from this machine and
-// acts as a client against another agent.
+// Command ratatoskr is both the agent and the client. One keypair, one
+// peer id, both roles.
+//
+// The dev-listen and dev-dial subcommands are step 0 scaffolding. They
+// prove a Noise-secured QUIC stream carries bytes between two machines,
+// and they go away once run/connect of PLAN.md §16 replace them.
 package main
 
 import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/achmadss/ratatoskr/internal/transport"
-	"github.com/pion/webrtc/v4"
+	"github.com/libp2p/go-libp2p/core/network"
 )
 
-// version is overridden at build time with -ldflags "-X main.version=...".
-var version = "dev"
-
-const usage = `ratatoskr - peer file agent
-
-Usage:
-  ratatoskr version
-  ratatoskr dev-offer     start a connection; prints an offer, reads an answer
-  ratatoskr dev-answer    join a connection; reads an offer, prints an answer
-
-dev-offer and dev-answer exchange SDP by hand. They are replaced by heimdall
-in step 1.
-`
+const version = "0.0.1"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
+		usage()
 		os.Exit(2)
 	}
-
 	var err error
 	switch os.Args[1] {
 	case "version":
-		fmt.Println(version)
-	case "dev-offer":
-		err = devOffer()
-	case "dev-answer":
-		err = devAnswer()
+		fmt.Println("ratatoskr", version)
+	case "dev-listen":
+		err = devListen()
+	case "dev-dial":
+		if len(os.Args) < 3 {
+			err = fmt.Errorf("dev-dial needs an address")
+			break
+		}
+		err = devDial(os.Args[2])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
+		usage()
 		os.Exit(2)
 	}
-
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ratatoskr: %v\n", err)
+		fmt.Fprintln(os.Stderr, "ratatoskr:", err)
 		os.Exit(1)
 	}
 }
 
-// devOffer is the client side of the step 0 echo test.
-func devOffer() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+func usage() {
+	fmt.Fprint(os.Stderr, `usage: ratatoskr <command>
 
-	conn, err := transport.New(transport.DefaultICEServers())
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	offer, err := conn.Offer(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stderr, "--- copy this OFFER into `ratatoskr dev-answer` ---")
-	fmt.Println(offer)
-	fmt.Fprintln(os.Stderr, "--- paste the ANSWER here, then press enter ---")
-
-	answer, err := readBlob()
-	if err != nil {
-		return err
-	}
-	if err := conn.Accept(answer); err != nil {
-		return err
-	}
-
-	if err := waitCtrl(conn, 30*time.Second); err != nil {
-		return err
-	}
-	reportPath(conn)
-
-	replies := make(chan string, 1)
-	conn.Ctrl.OnMessage(func(m webrtc.DataChannelMessage) { replies <- string(m.Data) })
-
-	const sent = "hello from ratatoskr"
-	if err := conn.Ctrl.SendText(sent); err != nil {
-		return fmt.Errorf("send: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "sent:  %s\n", sent)
-
-	select {
-	case got := <-replies:
-		fmt.Fprintf(os.Stderr, "got:   %s\n", got)
-		if got != "echo: "+sent {
-			return fmt.Errorf("unexpected reply %q", got)
-		}
-		fmt.Fprintln(os.Stderr, "echo ok")
-		return nil
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("no reply within 10s")
-	case <-conn.Closed:
-		return fmt.Errorf("connection lost before reply")
-	}
+  version              print the version
+  dev-listen           listen and echo (step 0 scaffold)
+  dev-dial <addr>      dial an address and echo a line (step 0 scaffold)
+`)
 }
 
-// devAnswer is the serving side of the step 0 echo test.
-func devAnswer() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	conn, err := transport.New(transport.DefaultICEServers())
+func devListen() error {
+	h, err := transport.New(transport.Options{})
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer h.Close()
 
-	fmt.Fprintln(os.Stderr, "--- paste the OFFER here, then press enter ---")
-	offer, err := readBlob()
-	if err != nil {
-		return err
-	}
-
-	answer, err := conn.Answer(ctx, offer)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(os.Stderr, "--- copy this ANSWER back into `ratatoskr dev-offer` ---")
-	fmt.Println(answer)
-
-	if err := waitCtrl(conn, 30*time.Second); err != nil {
-		return err
-	}
-	reportPath(conn)
-
-	done := make(chan error, 1)
-	conn.Ctrl.OnMessage(func(m webrtc.DataChannelMessage) {
-		fmt.Fprintf(os.Stderr, "got:   %s\n", m.Data)
-		done <- conn.Ctrl.SendText("echo: " + string(m.Data))
+	h.Handle(transport.EchoProto, func(s network.Stream) {
+		defer s.Close()
+		c := transport.Describe(s.Conn())
+		fmt.Printf("stream from %s over %s (%s) at %s\n",
+			c.Peer, c.Transport, c.Path, c.Addr)
+		if _, err := io.Copy(s, s); err != nil {
+			fmt.Fprintln(os.Stderr, "echo:", err)
+		}
 	})
 
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("echo: %w", err)
-		}
-		fmt.Fprintln(os.Stderr, "echo ok")
-		// Give SCTP a moment to flush before the deferred Close.
-		time.Sleep(500 * time.Millisecond)
-		return nil
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("no message within 30s")
-	case <-conn.Closed:
-		return fmt.Errorf("connection lost before any message")
+	fmt.Println("peer id:", h.ID())
+	fmt.Println("dial one of:")
+	for _, a := range h.Addrs() {
+		fmt.Println("  ", a)
 	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+	fmt.Println("\nstopping")
+	return nil
 }
 
-func waitCtrl(conn *transport.Conn, d time.Duration) error {
-	select {
-	case <-conn.CtrlReady:
-		return nil
-	case <-conn.Closed:
-		return fmt.Errorf("connection failed before the control channel opened")
-	case <-time.After(d):
-		return fmt.Errorf("control channel did not open within %s", d)
+func devDial(addr string) error {
+	h, err := transport.New(transport.Options{})
+	if err != nil {
+		return err
 	}
-}
+	defer h.Close()
 
-func reportPath(conn *transport.Conn) {
-	kind, desc := conn.Path()
-	fmt.Fprintf(os.Stderr, "connected (%s): %s\n", kind, desc)
-}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-// readBlob reads one base64 SDP line from stdin.
-func readBlob() (string, error) {
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		if line := sc.Text(); line != "" {
-			return line, nil
-		}
+	s, err := h.Dial(ctx, addr, transport.EchoProto)
+	if err != nil {
+		return err
 	}
-	if err := sc.Err(); err != nil {
-		return "", fmt.Errorf("read stdin: %w", err)
+	defer s.Close()
+
+	c := transport.Describe(s.Conn())
+	fmt.Printf("connected to %s over %s (%s) at %s\n",
+		c.Peer, c.Transport, c.Path, c.Addr)
+
+	const msg = "ratatoskr says hello\n"
+	if _, err := io.WriteString(s, msg); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
-	return "", fmt.Errorf("no input on stdin")
+	if err := s.CloseWrite(); err != nil {
+		return fmt.Errorf("half close: %w", err)
+	}
+
+	back, err := bufio.NewReader(s).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	if back != msg {
+		return fmt.Errorf("echo mismatch: sent %q, got %q", msg, back)
+	}
+	fmt.Printf("echo ok: %q\n", back)
+	return nil
 }
