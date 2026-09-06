@@ -120,8 +120,13 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 
 ---
 
-## Step 6 — Control protocol, LIST and STAT
+## Step 6 — File API, LIST and STAT
 
+- [ ] `internal/transport`: extract the `Transport` interface — `Call`,
+      `OpenStream`, `Path`, `Close`. Move the Pion code under `transport/webrtc`
+- [ ] `internal/transport/loopback`: in-process transport, so the whole file
+      layer is testable with no network at all
+- [ ] `internal/fileapi`: the verb surface. Nothing in it may import Pion
 - [ ] `PING` / `PONG` with round-trip time
 - [ ] `internal/fsroot`: clean, join, `EvalSymlinks`, verify inside root
 - [ ] `internal/fsroot`: the **write** variant — resolve the parent, then check
@@ -132,11 +137,13 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 - [ ] Shared roots carry a mode: `ro` or `rw`
 - [ ] `LIST` / `LIST_RESULT`, paged
 - [ ] `STAT` / `STAT_RESULT`
+- [ ] `DF` free space on a share
 - [ ] `ERROR` codes; never leak a real path or a stack trace
 - [ ] Enforce the 64 KB control message cap
 - [ ] `ratatoskr connect ID ls PATH`
 
-**Check:** a real directory prints. Every hostile path in the table is refused.
+**Check:** a real directory prints over both transports. Every hostile path in
+the table is refused.
 
 ---
 
@@ -158,6 +165,8 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 ## Step 8 — Download a small file
 
 - [ ] `READ` / `READ_OK` with size and BLAKE3 hash
+- [ ] `READ` with an offset and length — needed for resume, media seek and
+      type sniffing. Not optional, and cheap to add now
 - [ ] One `xfer-<id>` DataChannel per transfer
 - [ ] Frame format: uint32 sequence + payload, 16 KB chunks
 - [ ] Empty frame means end of stream, then close the channel
@@ -180,6 +189,10 @@ through. A found-but-unreachable peer falls through. Neither path hangs.
 - [ ] Measure and log throughput
 - [ ] Test: 10 GB over LAN, watch RSS on both sides
 - [ ] Test: 4 simultaneous transfers stay stable
+- [ ] `THUMBNAIL`: the agent renders a 256 px preview, so a gallery costs
+      kilobytes instead of megabytes
+- [ ] `COPY`: server-side. Prove a 4 GB copy moves ~200 bytes over the wire
+- [ ] `HASH`: checksum a file without transferring it
 
 **Check:** 10 GB completes, memory flat on both sides. **Transport milestone.**
 
@@ -215,8 +228,11 @@ the agent accepts a real grant while refusing every forged one.
 - [ ] Client identity: WebCrypto Ed25519, **non-extractable**, in IndexedDB
 - [ ] Login, then device list and per-device status (requirements 1 and 2)
 - [ ] Browser WebRTC peer: heimdall via ticket, ctrl channel, HELLO + AUTH
+- [ ] `web/src/transport.ts` and `web/src/fileapi.ts` — the same interface and
+      verbs as the Go side
 - [ ] `web/src/fs-adapter.ts` — our verbs only. Nothing else touches the
       file-manager library
+- [ ] Thumbnails in grid view come from `THUMBNAIL`, never from a full download
 - [ ] Mount `@cubone/react-file-manager` on the adapter
 - [ ] Service worker streaming download sink
 - [ ] File System Access API sink where available; feature-detect
