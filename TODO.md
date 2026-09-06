@@ -94,6 +94,9 @@ choice. Do it before anything depends on the answer.
 - [ ] Test: home Wi-Fi to phone hotspot; macOS↔Windows↔Linux; both peers
       behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
+- [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
+      how a torrent client stays off relays. Kept even though this house
+      is behind carrier NAT and it cannot help here.
 
 **Code is done, the measurement is not.** heimdall relays, the agent
 takes a reservation, and `connect --via lan|relay|auto` works: verified
@@ -142,7 +145,32 @@ that hands out a different external port per destination is symmetric,
 and a symmetric NAT is the one shape DCUtR cannot open: the address the
 relay observed is not the address the far peer will accept packets on.
 
-This is a property of Indonesian mobile CGNAT, not of the design. Every
+**Correction, same day.** The first reading of that log said symmetric
+NAT and stopped there. It was half the answer and the smaller half. The
+home line's public address is `180.252.216.153` — the same address the
+hotspot advertised, so both sides leave through one carrier NAT, and the
+punch was never between two networks in the way that matters.
+
+What settled it was a port-mapping test rather than more log reading.
+`libp2p.NATPortMap()` now asks the router to forward a port, which is
+the mechanism a torrent client uses and the one this project was
+missing. The router accepts the request: a hand-written UPnP
+`AddPortMapping` succeeds and reads back correctly. Then two facts
+land on top of each other. `GetExternalIPAddress` returns an empty
+string, and a UDP packet sent from the VPS to `180.252.216.153:41234`
+never arrives. A router that cannot name its own external address and
+whose forwards do nothing is not the edge of the network. The carrier's
+NAT is, and it holds the only public address here.
+
+There is no IPv6 to escape through either: no global address on the Mac,
+none on the VPS.
+
+So the honest statement of the constraint is that **this house has no
+inbound path at all**, by any protocol, and no amount of NAT traversal
+invents one.
+
+The symmetric-NAT reading still holds for the mobile side, and neither
+finding is the design's fault. Every
 system in this class meets it and every one answers the same way, with
 a relay: Tailscale has DERP, Syncthing has relay pools. What it settles
 is that **the relay is not a rare fallback and cannot be treated as

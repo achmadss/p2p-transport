@@ -88,6 +88,14 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// through. Both are why the relay is a fallback and not a bill.
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
+		// Ask the home router to forward a port, the way a torrent
+		// client does. This is what makes a relay a genuine last
+		// resort rather than the only route: a machine with a
+		// forwarded port is dialled directly by peers that could
+		// never be dialled themselves. It is also the only answer
+		// to a symmetric carrier NAT, which no amount of hole
+		// punching opens — the phone dials out, the house listens.
+		libp2p.NATPortMap(),
 	}
 	if len(infos) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(infos))
