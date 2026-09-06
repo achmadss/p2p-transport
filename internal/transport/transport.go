@@ -12,7 +12,9 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync/atomic"
 
+	"github.com/achmadss/ratatoskr/internal/stun"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -97,6 +99,25 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// punching opens — the phone dials out, the house listens.
 		libp2p.NATPortMap(),
 	}
+	// The address a reflector sees us at, once one has been asked and
+	// believed. Empty until then, and empty forever on a NAT that will
+	// not answer for it; see internal/stun.
+	var public atomic.Value
+	opts = append(opts, libp2p.AddrsFactory(func(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+		a, ok := public.Load().(multiaddr.Multiaddr)
+		if !ok {
+			return as
+		}
+		for _, have := range as {
+			if have.Equal(a) {
+				return as
+			}
+		}
+		out := make([]multiaddr.Multiaddr, len(as), len(as)+1)
+		copy(out, as)
+		return append(out, a)
+	}))
+
 	if len(infos) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(infos))
 	}
@@ -111,7 +132,44 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
+	go findPublicAddr(h, &public)
 	return &Host{h: h}, nil
+}
+
+// findPublicAddr asks a reflector where we are and, if the answer can be
+// trusted, adds it to what this host advertises.
+//
+// Only the QUIC address is claimed. STUN measured a UDP mapping and says
+// nothing about TCP, and an unsolicited inbound TCP handshake needs a
+// forwarded port rather than a punched one — so advertising a TCP
+// address here would be inventing a route. QUIC is the one that punches.
+//
+// It runs once, in the background, because a reflector may be slow or
+// absent and neither is a reason for the host not to start. A machine
+// that changes network keeps advertising the old address until restart.
+// ponytail: re-probe on EvtLocalAddressesUpdated when roaming matters.
+func findPublicAddr(h host.Host, public *atomic.Value) {
+	ip, ok := stun.PublicIP()
+	if !ok {
+		return
+	}
+	for _, a := range h.Network().ListenAddresses() {
+		if _, err := a.ValueForProtocol(multiaddr.P_QUIC_V1); err != nil {
+			continue
+		}
+		port, err := a.ValueForProtocol(multiaddr.P_UDP)
+		if err != nil {
+			continue
+		}
+		if v, err := a.ValueForProtocol(multiaddr.P_IP4); err != nil || v == "" {
+			continue
+		}
+		ma, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/udp/%s/quic-v1", ip, port))
+		if err == nil {
+			public.Store(ma)
+		}
+		return
+	}
 }
 
 // Host exposes the libp2p host to packages that need to attach to it,

@@ -1,15 +1,11 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
-	"net"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/ratatoskr/internal/stun"
 )
 
 // natcheck answers the only question that decides whether two machines
@@ -28,151 +24,46 @@ import (
 // two distinct addresses among them — plus two ports on one address, or
 // the last two answers cannot be told apart.
 
-var stunServers = config.List("RATATOSKR_STUN")
-
-func defaultStun() []string {
-	if len(stunServers) > 0 {
-		return stunServers
-	}
-	return []string{
-		"stun.l.google.com:19302",
-		"stun1.l.google.com:19302",
-		"stun.cloudflare.com:3478",
-	}
-}
-
-type reflection struct {
-	server string
-	ip     net.IP
-	mapped string
-	err    error
-}
-
-// stunAsk sends one binding request on an existing socket and reads the
-// mapped address back. The socket is shared across servers on purpose:
-// a fresh socket per server would measure nothing.
-func stunAsk(c *net.UDPConn, server string) reflection {
-	r := reflection{server: server}
-
-	addr, err := net.ResolveUDPAddr("udp4", server)
-	if err != nil {
-		r.err = err
-		return r
-	}
-	r.ip = addr.IP
-
-	req := make([]byte, 20)
-	binary.BigEndian.PutUint16(req[0:], 0x0001) // binding request
-	binary.BigEndian.PutUint16(req[2:], 0)      // no attributes
-	binary.BigEndian.PutUint32(req[4:], 0x2112A442)
-	if _, err := rand.Read(req[8:20]); err != nil {
-		r.err = err
-		return r
-	}
-
-	if _, err := c.WriteToUDP(req, addr); err != nil {
-		r.err = err
-		return r
-	}
-
-	// Read until a reply carrying our transaction id arrives: another
-	// server's reply may be in flight on the same socket.
-	deadline := time.Now().Add(3 * time.Second)
-	c.SetReadDeadline(deadline)
-	buf := make([]byte, 1500)
-	for time.Now().Before(deadline) {
-		n, from, err := c.ReadFromUDP(buf)
-		if err != nil {
-			r.err = err
-			return r
-		}
-		if n < 20 || !from.IP.Equal(addr.IP) {
-			continue
-		}
-		if string(buf[8:20]) != string(req[8:20]) {
-			continue
-		}
-		if m := parseMapped(buf[:n]); m != "" {
-			r.mapped = m
-			return r
-		}
-	}
-	r.err = fmt.Errorf("no usable reply")
-	return r
-}
-
-// parseMapped reads XOR-MAPPED-ADDRESS, falling back to the older
-// MAPPED-ADDRESS that some servers still answer with.
-func parseMapped(b []byte) string {
-	n := int(binary.BigEndian.Uint16(b[2:]))
-	if 20+n > len(b) {
-		n = len(b) - 20
-	}
-	for p := 20; p+4 <= 20+n; {
-		typ := binary.BigEndian.Uint16(b[p:])
-		l := int(binary.BigEndian.Uint16(b[p+2:]))
-		v := b[p+4:]
-		if l > len(v) {
-			return ""
-		}
-		v = v[:l]
-		if (typ == 0x0020 || typ == 0x0001) && l >= 8 && v[1] == 0x01 {
-			port := binary.BigEndian.Uint16(v[2:])
-			ip := net.IP(append([]byte(nil), v[4:8]...))
-			if typ == 0x0020 {
-				port ^= 0x2112
-				for i := range ip {
-					ip[i] ^= b[4+i]
-				}
-			}
-			return fmt.Sprintf("%s:%d", ip, port)
-		}
-		p += 4 + l
-		p += (4 - l%4) % 4 // attributes are padded to four bytes
-	}
-	return ""
-}
-
 func natcheck() error {
-	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
-	if err != nil {
-		return err
+	got, local := stun.Reflect()
+	if local == 0 {
+		return fmt.Errorf("cannot open a UDP socket")
 	}
-	defer c.Close()
+	fmt.Printf("one socket, local port %d\n\n", local)
 
-	local := c.LocalAddr().(*net.UDPAddr)
-	fmt.Printf("one socket, local port %d\n\n", local.Port)
-
-	var got []reflection
-	for _, s := range defaultStun() {
-		r := stunAsk(c, s)
-		got = append(got, r)
-		if r.err != nil {
-			fmt.Printf("  %-32s  unreachable: %v\n", s, r.err)
+	for _, r := range got {
+		if r.Err != nil {
+			fmt.Printf("  %-32s  unreachable: %v\n", r.Server, r.Err)
 			continue
 		}
-		fmt.Printf("  %-32s  seen as %s\n", s, r.mapped)
+		fmt.Printf("  %-32s  seen as %s\n", r.Server, r.Mapped)
 	}
 	fmt.Println()
-	fmt.Println(verdict(got, local.Port))
+	fmt.Println(verdict(got, local))
+
+	if ip, ok := stun.PublicIP(); ok {
+		fmt.Printf("\nadvertising %s to peers.\n", ip)
+	} else {
+		fmt.Println("\nnot advertising any address: the measurement does not support one,\nso this machine can only be reached over the relay.")
+	}
 	return nil
 }
 
 // verdict classifies the mapping, and says plainly when the evidence is
 // not enough to classify it rather than guessing.
-func verdict(got []reflection, localPort int) string {
+func verdict(got []stun.Reflection, localPort int) string {
 	byIP := map[string]map[string]bool{} // server ip -> mapped values
 	all := map[string]bool{}
 	for _, r := range got {
-		if r.err != nil {
+		if r.Err != nil {
 			continue
 		}
-		k := r.ip.String()
+		k := r.IP.String()
 		if byIP[k] == nil {
 			byIP[k] = map[string]bool{}
 		}
-		byIP[k][r.mapped] = true
-		all[r.mapped] = true
+		byIP[k][r.Mapped] = true
+		all[r.Mapped] = true
 	}
 	if len(all) == 0 {
 		return "no reflector answered: the result is unknown, not good."
