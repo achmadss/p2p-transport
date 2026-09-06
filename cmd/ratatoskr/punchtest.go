@@ -92,6 +92,13 @@ func punchtest() error {
 		}
 	}()
 
+	// When the first packet lands matters as much as whether one does.
+	// libp2p punches for five seconds, three times; if a path takes
+	// thirty seconds to open, a test that runs for four minutes calls it
+	// a success and DCUtR calls the same path unreachable.
+	begin := time.Now()
+	var first time.Duration
+
 	var gotSmall, gotLarge int
 	buf := make([]byte, 2000)
 	for time.Now().Before(stop) {
@@ -108,11 +115,21 @@ func punchtest() error {
 		} else {
 			gotSmall++
 		}
+		if first == 0 {
+			first = time.Since(begin)
+		}
 		if gotSmall+gotLarge <= 2 {
-			fmt.Printf("  RECEIVED %d bytes from %s\n", n, from)
+			fmt.Printf("  RECEIVED %d bytes from %s after %s\n", n, from, time.Since(begin).Round(time.Millisecond))
 		}
 	}
 
+	if first > 0 {
+		fmt.Printf("\n  first packet arrived after %s\n", first.Round(time.Millisecond))
+		if first > 15*time.Second {
+			fmt.Println("  libp2p would have given up by then: it punches for five")
+			fmt.Println("  seconds, three times, and stops.")
+		}
+	}
 	fmt.Printf("\n  small (15 bytes):   %d arrived\n", gotSmall)
 	fmt.Printf("  large (1280 bytes): %d arrived\n\n", gotLarge)
 	switch {
