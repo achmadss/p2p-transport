@@ -175,6 +175,19 @@ may run at relay speed for its whole life, so resume, progress and
 cancellation are load-bearing rather than polish, and step 11's metering
 is what stops one such transfer from spending a month of VPS egress.
 
+## Step 3.5 — Relay hygiene
+
+Two fixes that fell out of the punch measurement, both small, both done
+before anything builds on the transport.
+
+- [ ] Enable AutoNAT v2 (`libp2p.EnableAutoNATv2()`) in
+      `internal/transport`. v0.49 ships it opt-in and the host runs
+      without it, so reachability rests on v1 probes and observed
+      addresses from identify.
+- [ ] Move heimdall's TCP listener to port 443 (`cmd/heimdall`). Some
+      networks drop 4001 and pass 443; Tailscale's DERP relays sit on
+      443 for the same reason.
+
 ---
 
 ## Step 4 — File API: read side

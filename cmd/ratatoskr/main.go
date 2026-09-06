@@ -43,6 +43,16 @@ var (
 	dialTimeout  = config.Duration("RATATOSKR_DIAL_TIMEOUT", 30*time.Second)
 	benchTimeout = config.Duration("RATATOSKR_BENCH_TIMEOUT", 10*time.Minute)
 	punchWindow  = config.Duration("RATATOSKR_PUNCH_WINDOW", 30*time.Second)
+
+	// A relayed byte crosses the relay's host twice, in and out, and
+	// TODO.md step 3 measured a network where no direct path is ever
+	// reachable: against a symmetric carrier NAT the relay is not a
+	// fallback, it is the only route. A transfer there can spend a
+	// month of someone's egress without ever looking wrong. The cap
+	// bounds one transfer; zero, the default, means no cap, because
+	// refusing a transfer the user asked for is worse than the bill
+	// until they have said which bill they mind.
+	relayCap = config.Bytes("RATATOSKR_RELAY_CAP", 0)
 )
 
 func main() {
@@ -105,6 +115,8 @@ environment (empty means the default):
   RATATOSKR_BENCH_TIMEOUT   whole benchmark                      (10m)
   RATATOSKR_PUNCH_WINDOW    wait for a hole punch                (30s)
   RATATOSKR_BENCH_MB        default benchmark size               (100)
+  RATATOSKR_RELAY_CAP       bytes one relayed transfer may move,
+                            K/M/G suffixes. 0 means no cap.        (0)
 `)
 }
 
@@ -174,7 +186,7 @@ func run() error {
 
 	h.Handle(transport.BenchProto, func(s network.Stream) {
 		defer s.Close()
-		n, err := io.Copy(io.Discard, s)
+		n, err := io.Copy(guard(s.Conn(), io.Discard), s)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "bench:", err)
 			return
@@ -402,8 +414,16 @@ func bench(want, path string, mb int64) error {
 	fmt.Printf("connected to %s over %s\n", identity.Short(peerID.String()), first)
 
 	total := mb << 20
+	// Refuse before sending, not part way through. The far end has
+	// already agreed to receive by here, so a mid-transfer failure
+	// would have cost the relay every byte up to the limit.
+	if first == transport.PathRelay && relayCap > 0 && total > relayCap {
+		return fmt.Errorf("%d MB over a relayed link exceeds the %s cap; raise or clear RATATOSKR_RELAY_CAP",
+			mb, human(relayCap))
+	}
+
 	start := time.Now()
-	if _, err := io.CopyN(s, zeros{}, total); err != nil {
+	if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, total); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
 	if err := s.CloseWrite(); err != nil {
@@ -453,6 +473,46 @@ func watchUpgrade(h *transport.Host, id peer.ID) {
 			}
 		}
 	}
+}
+
+// human writes a byte count the way the cap was most likely typed.
+func human(n int64) string {
+	for _, u := range []struct {
+		suffix string
+		scale  int64
+	}{{"G", 1 << 30}, {"M", 1 << 20}, {"K", 1 << 10}} {
+		if n >= u.scale {
+			return fmt.Sprintf("%d %sB", n/u.scale, u.suffix)
+		}
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
+
+// guard applies the relay cap, and only when the connection is actually
+// relayed: a direct transfer costs nobody anything and is never capped.
+// Both ends guard, because both ends pay.
+func guard(c network.Conn, w io.Writer) io.Writer {
+	if relayCap > 0 && transport.Describe(c).Path == transport.PathRelay {
+		return &capped{w: w, left: relayCap}
+	}
+	return w
+}
+
+// capped fails the transfer at the limit rather than truncating it. A
+// copy that stops early and reports success is how a half-written file
+// gets mistaken for a whole one.
+type capped struct {
+	w    io.Writer
+	left int64
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	c.left -= int64(len(p))
+	if c.left < 0 {
+		return 0, fmt.Errorf("relayed transfer hit the %s limit; raise or clear RATATOSKR_RELAY_CAP",
+			human(relayCap))
+	}
+	return c.w.Write(p)
 }
 
 // zeros is an endless reader. The bytes are incompressible enough for
