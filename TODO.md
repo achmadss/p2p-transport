@@ -163,7 +163,26 @@ whose forwards do nothing is not the edge of the network. The carrier's
 NAT is, and it holds the only public address here.
 
 There is no IPv6 to escape through either: no global address on the Mac,
-none on the VPS.
+none on the VPS, and `ndp -pn` reports **no advertising router** on the
+home link, so the line is not offering IPv6 at all.
+
+**The valid two-network test, finally.** Home on `180.252.216.153`, the
+Windows box on a hotspot on `182.6.161.1` — two carriers, two addresses,
+the test the earlier one only looked like. Three DCUtR attempts, no
+punch, and this time the log is worth trusting:
+
+- Every IPv6 candidate the phone offers dies with `no route to host`.
+  The phone has a real public IPv6 and the house has no IPv6 to reach it
+  with. This is the closest thing to a working path in the whole
+  measurement, and one router setting away from existing.
+- The single IPv4 candidate is `182.6.161.1/udp/16295`, while the same
+  peer listens on `56954`. A NAT that assigns a fresh external port per
+  destination is symmetric, and the address the relay observed is not an
+  address anyone else may use. `timeout: no recent network activity`.
+
+Both ends are therefore closed, for different reasons, and the two
+reasons need different fixes. The house needs an inbound path it does
+not have; the phone needs a NAT it does not control.
 
 So the honest statement of the constraint is that **this house has no
 inbound path at all**, by any protocol, and no amount of NAT traversal
