@@ -83,7 +83,7 @@ The step that can genuinely fail, and the one that proves the libp2p
 choice. Do it before anything depends on the answer.
 
 - [x] `cmd/heimdall`: libp2p node with circuit relay v2 hop enabled
-- [ ] Deploy it to a VPS with a public address
+- [x] Deploy it to a VPS with a public address
 - [x] Agent: enable AutoNAT, relay client, and DCUtR hole punching
 - [ ] Agent takes a relay reservation and prints its circuit multiaddr
 - [ ] Dial that circuit address from a different network
@@ -108,6 +108,29 @@ first relayed attempt hung rather than failed. And AutoNAT correctly
 declines to reserve when it believes it is reachable, so
 `RATATOSKR_FORCE_PRIVATE=1` exists to force the relay path in testing
 and must never be set in production.
+
+**Measured, 6 Sep 2026.** heimdall on a VPS at 103.181.143.222, a
+MacBook and a Windows box on the same home Wi-Fi. The relay sits behind
+a cloud NAT and sees only `10.41.250.254`, so `HEIMDALL_ANNOUNCE` names
+the public address; without it every agent is told to dial an address
+that reaches nothing.
+
+| Path | Throughput |
+|------|-----------|
+| LAN, mDNS-discovered, Wi-Fi | 65.2 MB/s (200 MB in 3.07 s) |
+| Relayed through the VPS | 3.7 MB/s (50 MB in 13.7 s) |
+
+`--via auto` chose the LAN, as designed. No hole punch: both peers sit
+behind the same router, and DCUtR has nothing to punch through when the
+only route between them is the LAN it was told to ignore. The punch rate
+is the number still missing, and it needs two different networks.
+
+Windows cost two hours that were not code. Defender deleted the binary
+on arrival, git-bash rewrote `/ip4/...` into `C:/Program Files/Git/ip4/...`
+until `MSYS_NO_PATHCONV=1` stopped it, and the firewall dropped every
+inbound dial silently until a rule named the executable. None of it is
+Ratatoskr's fault and all of it is Ratatoskr's problem, because a user
+on Windows meets the same three walls.
 
 **Check:** two machines on different networks connect, and the numbers
 exist on paper. If throughput or punch rate is bad, stop and reconsider
