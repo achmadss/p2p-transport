@@ -153,6 +153,8 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		opts = append(opts, libp2p.ForceReachabilityPrivate())
 	}
 
+	opts = append(opts, wireTap()...)
+
 	h, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("start host: %w", err)
