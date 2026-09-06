@@ -1,0 +1,132 @@
+diag: reachability unknown until AutoNAT answers
+diag: AutoNAT says this machine is Private
+diag: advertised addresses changed:
+diag:   direct addrs (6): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: none
+serving as HtZh-LKTg on this network
+from another network, connect to:
+   12D3KooWSbkGouC6jErQCXHTgNqwHrUSoxEA1G7Le5o2HtZhLKTg
+waiting. ctrl-c to stop.
+diag: advertised addresses changed:
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   conn relay  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit  2HEr5qw3 limited
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w
+diag:   direct addrs (7): /ip4/127.0.0.1/tcp/56254 /ip4/127.0.0.1/udp/63452/quic-v1 /ip4/180.252.216.153/udp/63452/quic-v1 /ip4/192.168.2.141/tcp/56254 /ip4/192.168.2.141/udp/63452/quic-v1 /ip6/::1/tcp/56257 /ip6/::1/udp/58598/quic-v1
+diag:   relay reservation: yes, /ip4/103.181.143.222/tcp/4001/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit /ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit
+diag:   conn direct  /ip4/0.0.0.0/udp/63452/quic-v1 -> /ip4/103.181.143.222/udp/4001/quic-v1  sS3cPk5w

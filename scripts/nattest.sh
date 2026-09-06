@@ -26,6 +26,12 @@ export RATATOSKR_RELAYS=$RELAY
 export RATATOSKR_DIAG=1
 export RATATOSKR_PUNCH_WINDOW=${RATATOSKR_PUNCH_WINDOW:-60s}
 
+# libp2p's own account of the punch. Our diag says what we advertised;
+# these four subsystems say what was offered, what was dialled, and how
+# it failed, which is the difference between a closed network and a
+# wrong configuration. Everything else stays at error.
+export GOLOG_LOG_LEVEL=${GOLOG_LOG_LEVEL:-error,p2p-holepunch=debug,autorelay=debug,autonat=debug,net/identify=debug}
+
 BIN=${RATATOSKR:-}
 if [ -z "$BIN" ]; then
 	for c in ./dist/ratatoskr ./ratatoskr "$HOME/Downloads/ratatoskr.exe" "$HOME/ratatoskr.exe"; do
@@ -53,6 +59,11 @@ serve)
 dial)
 	[ $# -ge 2 ] || { echo "usage: $0 dial <id>" >&2; exit 2; }
 	"$BIN" bench "$2" --via relay --mb 1 2>&1 | tee "$log"
+	echo
+	echo "--- what libp2p offered and dialled ---"
+	grep -E "initiating hole punch|received hole punch|hole punch attempt|attempting direct dial|no public address" "$log" | tail -12
+	echo
+	echo "send $log and the other machine's nattest-serve.log"
 	;;
 *)
 	sed -n '2,20p' "$0"
