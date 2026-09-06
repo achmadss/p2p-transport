@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/identity"
+	"github.com/achmadss/p2p-transport/internal/identity"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"

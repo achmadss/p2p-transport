@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/achmadss/ratatoskr/internal/stun"
+	"github.com/achmadss/p2p-transport/internal/stun"
 )
 
 // natcheck answers the only question that decides whether two machines

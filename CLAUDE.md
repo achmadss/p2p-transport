@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Ratatoskr is a private, peer-to-peer network drive for a user's own
 machines. Files stay on their hardware; the bytes travel directly between
-their devices. Three binaries, one Go module:
+their devices. Three binaries, one Go module —
+`github.com/achmadss/p2p-transport`, which is the repository name; the
+product and its agent binary are both called Ratatoskr:
 
 | Binary | Role |
 |--------|------|

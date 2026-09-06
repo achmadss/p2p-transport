@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/config"
-	"github.com/achmadss/ratatoskr/internal/transport"
+	"github.com/achmadss/p2p-transport/internal/config"
+	"github.com/achmadss/p2p-transport/internal/transport"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"

@@ -1,4 +1,4 @@
-module github.com/achmadss/ratatoskr
+module github.com/achmadss/p2p-transport
 
 go 1.26.2
 

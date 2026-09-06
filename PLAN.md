@@ -1,6 +1,6 @@
 # Ratatoskr — Plan
 
-Module path: `github.com/achmadss/ratatoskr`
+Module path: `github.com/achmadss/p2p-transport`
 
 `SPEC.md` is the requirement. This is the design that satisfies it.
 `TODO.md` is the ordered work.
@@ -848,7 +848,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o dist/ratatoskr.exe ./cmd/rat
 ## 18. Repository layout
 
 ```
-ratatoskr/
+p2p-transport/
 ├── cmd/
 │   ├── ratatoskr/     the agent and client binary
 │   ├── heimdall/      relay node

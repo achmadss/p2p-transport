@@ -20,7 +20,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/p2p-transport/internal/config"
 )
 
 // Servers are the reflectors. Three by default, on at least two

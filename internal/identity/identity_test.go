@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/p2p-transport/internal/config"
 )
 
 // isolate points the config package at a fresh directory, so a test

@@ -2,3 +2,4 @@ dist/
 *.exe
 *.test
 .DS_Store
+nattest-*.log

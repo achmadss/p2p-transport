@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/config"
-	"github.com/achmadss/ratatoskr/internal/stun"
+	"github.com/achmadss/p2p-transport/internal/config"
+	"github.com/achmadss/p2p-transport/internal/stun"
 )
 
 // punchtest takes libp2p out of the question.

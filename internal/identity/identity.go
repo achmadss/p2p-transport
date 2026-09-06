@@ -15,7 +15,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )

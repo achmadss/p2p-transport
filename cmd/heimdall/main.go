@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/achmadss/ratatoskr/internal/config"
-	"github.com/achmadss/ratatoskr/internal/identity"
-	"github.com/achmadss/ratatoskr/internal/transport"
+	"github.com/achmadss/p2p-transport/internal/config"
+	"github.com/achmadss/p2p-transport/internal/identity"
+	"github.com/achmadss/p2p-transport/internal/transport"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
