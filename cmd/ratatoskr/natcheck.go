@@ -41,11 +41,11 @@ func natcheck() error {
 	fmt.Println()
 	fmt.Println(verdict(got, local))
 
-	if ip, ok := stun.PublicIP(); ok {
-		fmt.Printf("\nadvertising %s to peers.\n", ip)
-	} else {
-		fmt.Println("\nnot advertising any address: the measurement does not support one,\nso this machine can only be reached over the relay.")
-	}
+	// The address itself is not taken from here. A reflector names the
+	// socket that asked it, and a NAT that renumbers ports gives the
+	// socket libp2p punches from a different external port; the relay is
+	// asked for that one instead. What this command settles is whether
+	// any single address exists to be found at all.
 	return nil
 }
 

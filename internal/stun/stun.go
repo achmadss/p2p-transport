@@ -1,14 +1,16 @@
 // Package stun asks a public reflector what address the world sees this
 // socket as.
 //
-// It exists because libp2p will not tell us. libp2p learns its public
-// address from identify observations and waits for several peers to
-// agree before it believes one; a private drive whose only other peer is
-// its own relay never reaches that bar, so the host announces loopback
-// and LAN addresses and punches from an address it never published. A
-// hole punch is a simultaneous open — each side's outbound packet opens
-// its own NAT — so a peer with no publishable address is a peer nobody
-// can punch towards.
+// It answers one question and not the other. Asked from several
+// reflectors on one socket, it classifies the NAT's mapping behaviour
+// (RFC 4787), which decides whether a hole punch can work here at all.
+// It cannot supply the address to advertise: the port it reports belongs
+// to the socket that asked, and a NAT that renumbers ports gives the
+// socket libp2p punches from a different one. That address is asked of
+// the relay instead; see transport.ObservedProto.
+//
+// Its callers are therefore `ratatoskr natcheck` and `punchtest`, both
+// diagnostics.
 package stun
 
 import (
@@ -142,60 +144,4 @@ func Reflect() ([]Reflection, int) {
 		got = append(got, Ask(c, s))
 	}
 	return got, c.LocalAddr().(*net.UDPAddr).Port
-}
-
-// PublicIP is the address to advertise, or false when there is no
-// honest one to advertise.
-func PublicIP() (string, bool) {
-	got, port := Reflect()
-	return publicFrom(got, port)
-}
-
-// publicFrom decides whether the measurement licenses advertising an
-// address, and refuses whenever it does not.
-//
-// Two conditions, and both matter. Every reflector must have seen the
-// same external ip:port, on at least two distinct reflector addresses —
-// that is endpoint-independent mapping, and without it the port one
-// party observed is worthless to any other. And the external port must
-// equal the local one, because this socket is not the QUIC socket: the
-// only ground for claiming QUIC's port is visible outside unchanged is a
-// NAT that was just seen to preserve a port.
-//
-// ponytail: a NAT that maps endpoint-independently but renumbers the
-// port is punchable and is refused here anyway, because guessing its
-// QUIC port would advertise a lie. Sending the probe from the QUIC
-// socket itself is the fix, and needs libp2p to lend out that socket.
-func publicFrom(got []Reflection, localPort int) (string, bool) {
-	seen := map[string]bool{}
-	servers := map[string]bool{}
-	for _, r := range got {
-		if r.Err != nil || r.Mapped == "" {
-			continue
-		}
-		seen[r.Mapped] = true
-		servers[r.IP.String()] = true
-	}
-	if len(seen) != 1 || len(servers) < 2 {
-		return "", false
-	}
-
-	var mapped string
-	for m := range seen {
-		mapped = m
-	}
-	host, p, err := net.SplitHostPort(mapped)
-	if err != nil || p != fmt.Sprint(localPort) {
-		return "", false
-	}
-
-	ip := net.ParseIP(host)
-	// A carrier-grade NAT hands out 100.64.0.0/10, which looks like an
-	// answer and is another private address. Advertising it would send
-	// peers into the carrier's own network.
-	cgnat := &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip) {
-		return "", false
-	}
-	return host, true
 }
