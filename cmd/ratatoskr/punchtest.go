@@ -32,58 +32,9 @@ func punchtest() error {
 	}
 	defer c.Close()
 
-	local := c.LocalAddr().(*net.UDPAddr)
-	var mapped string
-	var keepalive *net.UDPAddr
-	for _, s := range stun.Servers() {
-		if r := stun.Ask(c, s); r.Err == nil {
-			mapped = r.Mapped
-			keepalive, _ = net.ResolveUDPAddr("udp4", s)
-			break
-		}
-	}
-	if mapped == "" || keepalive == nil {
-		return fmt.Errorf("no reflector answered, so this machine cannot name itself")
-	}
-
-	fmt.Printf("local port %d\n\n", local.Port)
-	fmt.Printf("  MY PUNCH ADDRESS:  %s\n\n", mapped)
-	fmt.Print("paste the other machine's punch address, then press enter: ")
-
-	// Carrying an address to the other machine by hand takes minutes,
-	// and a NAT forgets an idle UDP mapping in about one. Without this
-	// the address printed above expires while the operator is still
-	// typing it, and the test would measure nothing but that.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case <-time.After(15 * time.Second):
-				c.WriteToUDP([]byte{0}, keepalive)
-			}
-		}
-	}()
-
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	peer, err := meetPeer(c)
 	if err != nil {
 		return err
-	}
-	peer, err := net.ResolveUDPAddr("udp4", strings.TrimSpace(line))
-	if err != nil {
-		return fmt.Errorf("not an address: %w", err)
-	}
-
-	// Ask again now that the waiting is over. A keepalive holds the
-	// mapping open but cannot promise the carrier kept the same external
-	// port, and an address that went stale while it was being carried to
-	// the other machine would fail the test for a reason that has
-	// nothing to do with punching.
-	if r := stun.Ask(c, keepalive.String()); r.Err == nil && r.Mapped != mapped {
-		fmt.Printf("\n  WARNING: my address changed while waiting, %s -> %s\n", mapped, r.Mapped)
-		fmt.Println("  the other machine is aiming at the old one; start over.")
 	}
 
 	// Two people typing addresses to each other cannot start within
@@ -156,4 +107,66 @@ func punchtest() error {
 		fmt.Println("so the fault is in how we drive libp2p, not in the carriers.")
 	}
 	return nil
+}
+
+// meetPeer names this socket with a reflector, prints the address for
+// the operator to carry to the other machine, and reads back the far
+// side's.
+//
+// The socket that asks STUN is the socket that punches. An address
+// measured on any other one belongs to that one, which is the mistake
+// that cost this project an evening.
+func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
+	var mapped string
+	var keepalive *net.UDPAddr
+	for _, s := range stun.Servers() {
+		if r := stun.Ask(c, s); r.Err == nil {
+			mapped = r.Mapped
+			keepalive, _ = net.ResolveUDPAddr("udp4", s)
+			break
+		}
+	}
+	if mapped == "" || keepalive == nil {
+		return nil, fmt.Errorf("no reflector answered, so this machine cannot name itself")
+	}
+
+	fmt.Printf("local port %d\n\n", c.LocalAddr().(*net.UDPAddr).Port)
+	fmt.Printf("  MY PUNCH ADDRESS:  %s\n\n", mapped)
+	fmt.Print("paste the other machine's punch address, then press enter: ")
+
+	// Carrying an address by hand takes minutes and a NAT forgets an idle
+	// UDP mapping in about one. Without this the address printed above
+	// expires while the operator is still typing it, and the test would
+	// measure nothing but that.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(15 * time.Second):
+				c.WriteToUDP([]byte{0}, keepalive)
+			}
+		}
+	}()
+
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	peer, err := net.ResolveUDPAddr("udp4", strings.TrimSpace(line))
+	if err != nil {
+		return nil, fmt.Errorf("not an address: %w", err)
+	}
+
+	// Ask again now the waiting is over. A keepalive holds the mapping
+	// open but cannot promise the carrier kept the same external port, and
+	// an address that went stale while it was carried across the room
+	// would fail the test for a reason that is not punching.
+	if r := stun.Ask(c, keepalive.String()); r.Err == nil && r.Mapped != mapped {
+		fmt.Printf("\n  WARNING: my address changed while waiting, %s -> %s\n", mapped, r.Mapped)
+		fmt.Println("  the other machine is aiming at the old one; start over.")
+	}
+	return peer, nil
 }

@@ -70,6 +70,12 @@ func main() {
 		err = showID(len(args) > 0 && args[0] == "--full")
 	case "natcheck":
 		err = natcheck()
+	case "punch-quic":
+		if len(args) == 0 {
+			err = fmt.Errorf("punch-quic needs a role: listen on one machine, dial on the other")
+			break
+		}
+		err = punchQUIC(args[0])
 	case "punchtest":
 		err = punchtest()
 	case "run":
@@ -113,6 +119,12 @@ func usage() {
                        whether a direct connection is possible at all
   punchtest            punch a hole by hand, without libp2p, to tell a
                        closed network apart from a wrong configuration
+  punch-quic listen|dial
+                       the same punch, then a real QUIC handshake over
+                       it. punchtest proves a packet crosses; this
+                       proves a handshake does, which is what the agent
+                       needs. Run listen on one machine, dial on the
+                       other.
 
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR      where identity.key and config.json live
