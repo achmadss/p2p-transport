@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/achmadss/ratatoskr/internal/config"
+	"github.com/achmadss/ratatoskr/internal/identity"
 	"github.com/achmadss/ratatoskr/internal/transport"
 	"github.com/libp2p/go-libp2p/core/network"
 )
@@ -31,6 +33,8 @@ func main() {
 	switch os.Args[1] {
 	case "version":
 		fmt.Println("ratatoskr", version)
+	case "id":
+		err = showID(len(os.Args) > 2 && os.Args[2] == "--full")
 	case "dev-listen":
 		err = devListen()
 	case "dev-dial":
@@ -53,13 +57,40 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: ratatoskr <command>
 
   version              print the version
+  id [--full]          print this machine's identity
   dev-listen           listen and echo (step 0 scaffold)
   dev-dial <addr>      dial an address and echo a line (step 0 scaffold)
 `)
 }
 
+// showID prints the short fingerprint by default. The full peer id is
+// long and nobody reads it correctly; it belongs in diagnostics, which
+// is what --full is. SPEC.md §30.4.
+func showID(full bool) error {
+	id, err := identity.LoadOrCreate()
+	if err != nil {
+		return err
+	}
+	if !full {
+		fmt.Println(id.Fingerprint())
+		return nil
+	}
+	dir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+	fmt.Println("peer id:    ", id.ID())
+	fmt.Println("fingerprint:", id.Fingerprint())
+	fmt.Println("config dir: ", dir)
+	return nil
+}
+
 func devListen() error {
-	h, err := transport.New(transport.Options{})
+	id, err := identity.LoadOrCreate()
+	if err != nil {
+		return err
+	}
+	h, err := transport.New(transport.Options{Key: id.PrivateKey()})
 	if err != nil {
 		return err
 	}
@@ -89,7 +120,11 @@ func devListen() error {
 }
 
 func devDial(addr string) error {
-	h, err := transport.New(transport.Options{})
+	id, err := identity.LoadOrCreate()
+	if err != nil {
+		return err
+	}
+	h, err := transport.New(transport.Options{Key: id.PrivateKey()})
 	if err != nil {
 		return err
 	}

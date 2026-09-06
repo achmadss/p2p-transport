@@ -31,14 +31,22 @@ the Noise handshake.
 
 ## Step 1 — Identity and config
 
-- [ ] `internal/config`: per-OS dir via `os.UserConfigDir()`, created 0700
-- [ ] `internal/identity`: Ed25519 key on first run, `identity.key` at 0600
-- [ ] Refuse to start if the key file is group or world readable
-- [ ] Derive and cache the libp2p peer id
-- [ ] Short display fingerprint for the UI; full id in diagnostics only
-- [ ] `config.json`: shared folders with modes, trust list, device aliases
-- [ ] `ratatoskr id`
-- [ ] Tests: id stable across restarts; a corrupt key file fails loudly
+- [x] `internal/config`: per-OS dir via `os.UserConfigDir()`, created 0700
+- [x] `internal/identity`: Ed25519 key on first run, `identity.key` at 0600
+- [x] Refuse to start if the key file is group or world readable
+- [x] Derive and cache the libp2p peer id
+- [x] Short display fingerprint for the UI; full id in diagnostics only
+- [x] `config.json`: shared folders with modes, trust list, device aliases
+- [x] `ratatoskr id`
+- [x] Tests: id stable across restarts; a corrupt key file fails loudly
+
+**Done 2026-09-06** on macOS; Windows and Linux still to run. The
+permission check is skipped on Windows, whose Unix mode bits are
+synthetic — ACLs are a separate piece of work, not done here.
+
+`config.json`'s format and validation exist and are tested, but no
+command edits it yet; `trust`/`untrust`/`trusted` land with the
+authorisation work.
 
 **Check:** `ratatoskr id` prints the same id twice, on all three machines.
 

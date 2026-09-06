@@ -34,8 +34,20 @@ Those two dev subcommands are scaffolding. They exist to prove a stream
 carries bytes, and they are deleted once `run` and `connect` (`PLAN.md`
 §16) replace them — do not build features on them.
 
-The identity is generated per process and discarded on exit. Step 1 gives
-it a home on disk. Nothing else in `PLAN.md`'s package layout exists yet.
+**TODO step 1 is done.** `internal/config` owns the per-OS config
+directory (0700) and `config.json`; `internal/identity` owns
+`identity.key` (0600) and refuses to start when it is readable by other
+users. `ratatoskr id` prints the short fingerprint, `--full` the peer id.
+
+Two things that are true and easy to miss: the permission check is a
+no-op on Windows, because its Unix mode bits are synthetic and its access
+control lives in ACLs; and `config.json` has a format and validation but
+no command that edits it yet.
+
+Set `RATATOSKR_CONFIG_DIR` to run two agents on one machine. The tests
+rely on it.
+
+Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands
 
