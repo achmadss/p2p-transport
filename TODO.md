@@ -88,7 +88,8 @@ Rule: do not start a step until the one above it passes its check.
 - [ ] Rate limit it; cap concurrent handshakes; small body cap
 - [ ] Re-advertise when the network interface changes
 - [ ] `ratatoskr discover` lists agents seen on this network
-- [ ] `ratatoskr connect PEER_ID --via lan`
+- [ ] `ratatoskr connect PEER_ID --via lan` (no fallback)
+- [ ] Build LAN sessions with an empty ICE server list
 - [ ] Test on macOS, Windows and Linux; note every firewall prompt
 - [ ] Test with the router's Internet uplink physically unplugged
 
@@ -97,18 +98,25 @@ no Internet at all.
 
 ---
 
-## Step 5 — Discovery race
+## Step 5 — LAN-first discovery
 
-- [ ] Run LAN and heimdall discovery concurrently; first answer wins
+- [ ] Start mDNS at t=0; hold heimdall until t=400 ms
+- [ ] If the LAN answers in time, never open a heimdall session at all
+- [ ] LAN-discovered sessions use an **empty ICE server list**: host candidates
+      only, no STUN, no TURN — so nothing leaves the network
+- [ ] Internet-discovered sessions use the normal STUN/TURN list
+- [ ] Fall back to heimdall on either trigger: mDNS timeout, **or** peer found
+      on the LAN but the handshake with it failed
 - [ ] Cancel the loser cleanly; no leaked goroutine, socket or peer connection
-- [ ] Separate timeouts: LAN short (~500 ms), heimdall longer (~5 s)
-- [ ] Record which method won, and expose it in `status`
-- [ ] Handle: mDNS answers but the peer is unreachable → fall back, do not fail
-- [ ] Handle: both fail → one clear error, not two confusing ones
-- [ ] Tests with each path forced off
+- [ ] Timeouts: mDNS ~500 ms, heimdall ~5 s
+- [ ] Record which method won and expose it in `status`
+- [ ] Both fail → one clear error, not two confusing ones
+- [ ] `--via lan` fails instead of falling back, so the offline test is real
+- [ ] Test: capture traffic and confirm zero packets leave the LAN on a local
+      connect
 
-**Check:** LAN wins when present; multicast blocked falls through to heimdall;
-neither path hangs.
+**Check:** on a LAN, heimdall is never contacted. Multicast blocked falls
+through. A found-but-unreachable peer falls through. Neither path hangs.
 
 ---
 
@@ -206,7 +214,7 @@ neither path hangs.
 
 - [ ] Sleep and wake the serving machine
 - [ ] Switch Wi-Fi to hotspot mid-connection; ICE restart
-- [ ] Move between LAN and Internet; discovery re-races correctly
+- [ ] Move between LAN and Internet; discovery re-picks the right path
 - [ ] Restart the agent; re-register the same peer id
 - [ ] Restart heimdall; both agents reconnect
 - [ ] heimdall unreachable; agent retries with backoff, LAN still works

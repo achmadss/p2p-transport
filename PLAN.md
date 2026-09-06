@@ -53,13 +53,18 @@ through heimdall will still connect over the LAN, at LAN speed, with the
 bytes never leaving the building. Step 0 already proved this: the winning
 pair was `host <-> host`.
 
-So LAN discovery is **not** needed to get LAN speed. LAN discovery is
-needed for exactly one thing: working when the Internet is down or
-heimdall is unreachable.
+So LAN discovery is **not** what gives you LAN speed. ICE does that on
+its own. LAN discovery gives you two other things, both worth having:
 
-That is a real requirement, and it is worth building. But it is a
-resilience feature, not a performance feature, and it should be built
-second.
+1. **Independence.** The connection works with the Internet unplugged,
+   or with heimdall down, or with your VM's bill unpaid.
+2. **Privacy.** Nothing at all leaves the network. Not the file bytes,
+   which were never going to, but also not the fact that two of your
+   machines just talked to each other.
+
+Those are good enough reasons to make LAN the default path. See 4.5.
+It is still built after heimdall, because heimdall is the path that
+always works and the harder one to get right.
 
 ---
 
@@ -151,23 +156,45 @@ way now.
 
 ## 4. Discovery
 
-Given a peer id, find a way to swap SDP with it. Two independent methods,
-tried at the same time.
+Given a peer id, find a way to swap SDP with it. Two methods. **The LAN
+is the default. Heimdall is the fallback.**
 
 ```
 ratatoskr connect rt-k4m2...
         |
-        +--- LAN: mDNS query for the peer id       (~50-200 ms, no Internet)
+        +-- t=0     mDNS query for the peer id        no Internet needed
         |
-        +--- Internet: heimdall rendezvous          (~200-800 ms, needs Internet)
+        |           if it answers in time:
+        |              -> use it, and never contact heimdall at all
         |
+        +-- t=400ms heimdall rendezvous               starts only if the
+        |                                             LAN has not answered
         v
-   first one to answer wins; the other is cancelled
+   first working session wins; the loser is cancelled
 ```
 
-Race them, do not try them in sequence. Sequential means every remote
-connection pays the full mDNS timeout first, which is the wrong tax to
-pay on the common case.
+### 4.0 Why a head start and not a strict sequence
+
+A strict sequence — try LAN, wait for it to fail, then try heimdall —
+makes every remote connection pay the full mDNS timeout before it even
+begins. That is the wrong tax, because remote is the common case.
+
+A plain race, with both starting at t=0, has the opposite problem: it
+sends a packet to heimdall even when the peer is sitting on the same
+switch. That breaks the independence and privacy points above.
+
+The **head start** gets both. mDNS starts immediately. Heimdall is held
+for 400 ms. On a LAN, mDNS answers in 50-200 ms, so heimdall is never
+contacted. Off a LAN, the cost is 400 ms once, at connect time.
+
+Fallback is triggered by either of two things, not just one:
+
+- the mDNS query times out, **or**
+- the peer is found on the LAN but the handshake with it fails
+
+The second case matters. A local firewall can block the signal port
+while multicast still works. Finding the peer is not the same as
+reaching it.
 
 ### 4.1 LAN discovery — mDNS
 
@@ -223,14 +250,36 @@ host candidates and runs at wire speed.
 **One data path. Always WebRTC.** mDNS and heimdall are two doors into
 the same room.
 
-### 4.4 Where this leaves a browser
+### 4.5 A LAN session must stay on the LAN
+
+Discovery choosing the LAN is not enough on its own. ICE would still
+query the configured STUN servers, so packets would leave the network
+even though the connection is local. That quietly undoes the whole
+point.
+
+So a session that was discovered on the LAN is built with **host
+candidates only**: no STUN, no TURN, empty ICE server list.
+
+```
+discovered via LAN  ->  ICE servers: none          nothing leaves the network
+discovered via net  ->  ICE servers: STUN, + TURN  normal path
+```
+
+This makes "it works with the Internet unplugged" a guarantee that can
+be tested, rather than something that happens to work most of the time.
+
+If a host-only session fails to connect, fall back to heimdall like any
+other failure.
+
+### 4.6 Where this leaves a browser
 
 A browser cannot do mDNS. There is no web API for discovering devices on
 the local network, and there will not be one. A page served over HTTPS
 also cannot call a plain `http://192.168.x.x` endpoint, because that is
 blocked as mixed content.
 
-So a browser client will always use heimdall for discovery.
+So a browser client always uses heimdall for discovery. The LAN-default
+rule in this section applies to agent-to-agent connections only.
 
 **This costs almost nothing**, because of section 2: a browser on the
 same LAN as the agent still gets a direct LAN data path via ICE. Only
@@ -515,7 +564,8 @@ with two agents and no browser. Later it becomes machine-to-machine
 transfer, which is a feature in its own right.
 
 `--via` exists so tests can prove each discovery path separately instead
-of guessing which one won.
+of guessing which one won. `--via lan` also means "fail rather than fall
+back", which is what makes the Internet-unplugged test meaningful.
 
 ```
 heimdall serve --addr :8080
@@ -590,7 +640,7 @@ Each step has a check you can actually run. Do not move on early.
 | 2 | Mutual auth over `ctrl` | an untrusted peer id is refused; a tampered signature is refused |
 | 3 | heimdall rendezvous over the Internet | `ratatoskr connect <id>` links up with no pasting |
 | 4 | mDNS discovery and the local signal endpoint | `ratatoskr discover` lists the other machine; `connect --via lan` works with the router's Internet unplugged |
-| 5 | Discovery race | LAN wins when available; falls through to heimdall when multicast is blocked; both timeouts behave |
+| 5 | LAN-first discovery with a heimdall head start | on a LAN, heimdall is never contacted at all; multicast blocked falls through; a found-but-unreachable peer falls through too |
 | 6 | Control protocol: PING, LIST, STAT | a real listing prints; `../../etc/passwd` is refused |
 | 7 | Local control API | `ratatoskr status` talks to a running `ratatoskr run` |
 | 8 | Transfer one small file | a 10 MB file arrives, hash matches |
@@ -609,7 +659,7 @@ Step 10 is the first step that can genuinely fail.
 | Risk | Likely | Response |
 |------|--------|----------|
 | TURN relay rate much higher than 20% | Medium | Measure it from step 10. It is the number that decides whether hosting stays cheap |
-| mDNS blocked on the networks you actually use | Medium | Expected. The race falls through to heimdall. Measure how often LAN discovery wins |
+| mDNS blocked on the networks you actually use | Medium | Expected. Falls through to heimdall after the head start. Measure how often LAN discovery wins |
 | Firewall prompts on first run confuse users | High | Two prompts, UDP 5353 and the local signal port. A packaging problem, note it now |
 | The LAN signal endpoint becomes an attack surface | Medium | It does exactly one thing and grants nothing. Real auth is inside the encrypted channel. Rate limit and fuzz it |
 | Windows path edge cases open a hole | Medium | Treat `internal/fsroot` as security code. Table-driven tests with hostile inputs |
