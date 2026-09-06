@@ -297,6 +297,30 @@ is what stops one such transfer from spending a month of VPS egress.
 
 ## Step 3.5 — Relay hygiene
 
+The side-by-side run of 2026-09-06 20:45 settles what a dozen earlier
+runs could not, because for the first time both tools were on the wire at
+the same second, under one capture, between the same two machines on
+different networks. Counted by port, from the Mac:
+
+    leaving   996  54879 -> 41611     punchtest
+              118  63006 -> 14988     libp2p hole punch
+              116  63006 -> 14964     libp2p hole punch, a stale address
+    arriving  968  54879              punchtest
+                0  63006
+
+Every explanation that blames an address, a socket, a size or a carrier
+dies here. The punch left the right socket for the right port. In the
+seventeen seconds libp2p spent punching, 112 packets crossed between the
+same two public addresses on the other socket, so the path was open while
+the punch failed. Windows dialled `180.252.216.153/udp/63006`, which is
+this machine's true address, and nothing of it arrived.
+
+What is left is what the two sockets carry. punchtest sends bytes with no
+shape; libp2p sends QUIC Initials. `punch-quic` is the control that
+separates them, and it has never been run in a window where the raw punch
+was known to be open — every earlier attempt was aimed at a stale port.
+Run it before writing another line of transport code.
+
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
 
