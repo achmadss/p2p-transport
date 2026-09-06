@@ -333,11 +333,27 @@ the reply from 182.6.165.5:14988. Receiving nothing means the peer's
 packets arrived from some other port — that is, the port Windows
 advertises is not the port Windows punches from.
 
-Windows holds seven interfaces. go-libp2p's quicreuse keeps dial sockets
-apart from listen sockets, and a punch that leaves a dial socket carries
-a mapping nobody advertised. Confirm it by listing the UDP ports the
-agent holds during a failing dial, then make the punch leave the socket
-whose address was published.
+That lead was wrong twice over, and both refutations are worth keeping.
+Windows holds one QUIC socket, not several, so quicreuse hands the punch
+the socket whose address was published. And a tap installed through
+`quicreuse.OverrideListenUDP` — the socket's own account, from inside the
+process, on the machine with neither root nor a capture — showed both
+ends doing the same thing at the same moment: every packet sent to the
+address the peer advertised, and nothing received. Two correct addresses,
+two endpoint-independent mappings, four hundred packets, no arrivals.
+
+The difference is what opens the flow. `punch-quic` with fifteen seconds
+of bare datagrams in front of the handshake connects and carries a stream
+both ways. The same binary, same machines, same networks, minutes later,
+with `RATATOSKR_PUNCH_RAW=0` so that a QUIC Initial is the first packet
+the socket ever sends to that peer: nothing, in either direction. That is
+the agent's condition exactly, and it is the only condition in which this
+path fails.
+
+So the next number is how much bare traffic the path needs — `scripts/
+punchpair.sh <room> <seconds>` walks it down without an operator on each
+end. Then the fix goes where DCUtR can use it, because libp2p already
+sends sixty-four bytes of junk and five seconds of it is not enough.
 
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
