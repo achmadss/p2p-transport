@@ -68,6 +68,8 @@ func main() {
 		fmt.Println("ratatoskr", version)
 	case "id":
 		err = showID(len(args) > 0 && args[0] == "--full")
+	case "natcheck":
+		err = natcheck()
 	case "run":
 		err = run()
 	case "discover":
@@ -105,6 +107,8 @@ func usage() {
                        connect to a machine by id or fingerprint
   bench ID [--via ...] [--mb N]
                        measure throughput to a machine, default 100 MB
+  natcheck             classify this network's NAT, which decides
+                       whether a direct connection is possible at all
 
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR      where identity.key and config.json live
@@ -117,6 +121,13 @@ environment (empty means the default):
   RATATOSKR_BENCH_MB        default benchmark size               (100)
   RATATOSKR_RELAY_CAP       bytes one relayed transfer may move,
                             K/M/G suffixes. 0 means no cap.        (0)
+  RATATOSKR_STUN            natcheck reflectors, comma separated.
+                            Needs two addresses, and two ports on
+                            one of them to separate the last two
+                            mapping kinds.        (three public STUN)
+  RATATOSKR_DIAG            print AutoNAT's verdict, the relay
+                            reservation and every advertised address
+                            while run is serving                   (off)
 `)
 }
 
@@ -183,6 +194,10 @@ func run() error {
 		return err
 	}
 	defer h.Close()
+
+	diagCtx, stopDiag := context.WithCancel(context.Background())
+	defer stopDiag()
+	diagnose(diagCtx, h)
 
 	h.Handle(transport.BenchProto, func(s network.Stream) {
 		defer s.Close()

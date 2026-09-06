@@ -176,9 +176,10 @@ punch, and this time the log is worth trusting:
   with. This is the closest thing to a working path in the whole
   measurement, and one router setting away from existing.
 - The single IPv4 candidate is `182.6.161.1/udp/16295`, while the same
-  peer listens on `56954`. A NAT that assigns a fresh external port per
-  destination is symmetric, and the address the relay observed is not an
-  address anyone else may use. `timeout: no recent network activity`.
+  peer listens on `56954`. That was read as symmetric NAT. It is not
+  evidence of one — an ordinary cone NAT rewrites the port too — and the
+  measurement below shows the reading was wrong. `timeout: no recent
+  network activity`.
 
 Both ends are therefore closed, for different reasons, and the two
 reasons need different fixes. The house needs an inbound path it does
@@ -188,8 +189,42 @@ So the honest statement of the constraint is that **this house has no
 inbound path at all**, by any protocol, and no amount of NAT traversal
 invents one.
 
-The symmetric-NAT reading still holds for the mobile side, and neither
-finding is the design's fault. Every
+**The symmetric-NAT reading was wrong, and this is the third correction
+to the same paragraph.** `ratatoskr natcheck` asks three STUN servers
+from one socket and compares what each one sees, which is the test RFC
+4787 actually specifies. Both networks answer the same way:
+
+| network | local port | seen by all three reflectors |
+|---------|-----------|------------------------------|
+| home, IndiHome  | 51059 | `180.252.216.153:51059` |
+| phone, hotspot  | 60474 | `182.6.161.1:14650` |
+
+One external port per socket, the same one for every destination. That
+is **Endpoint-Independent Mapping** on both sides, which is the shape
+DCUtR is built for. Neither NAT is symmetric and neither is the reason
+the punch fails.
+
+The reason is in our own log. Before each attempt the Mac announces:
+
+    msg="Host now has a public address"
+    addresses="[/ip4/127.0.0.1/... /ip4/192.168.2.141/... /ip6/::1/...]"
+
+There is no public address in that list. `180.252.216.153` never enters
+the set libp2p advertises, so the DCUtR CONNECT the Mac sends carries
+only loopback and LAN candidates. The phone dials `192.168.2.141`,
+reaches nothing, and therefore never sends a packet toward the house.
+A hole punch is a *simultaneous* open: each side's outbound packet is
+what opens its own NAT for the other. One side punching is not a punch,
+and the Mac's dial to `182.6.161.1:14654` then times out against a
+mapping that was never opened for it.
+
+So the failure is ours, in address discovery, not the carriers'. libp2p
+learns its public address from identify observations and needs several
+agreeing ones from distinct peers; with a single relay as the only
+direct peer it never reaches that bar, and the host punches from an
+address it has not told anyone about.
+
+Neither
 system in this class meets it and every one answers the same way, with
 a relay: Tailscale has DERP, Syncthing has relay pools. What it settles
 is that **the relay is not a rare fallback and cannot be treated as
@@ -215,9 +250,9 @@ here rather than at step 9.
 
 **Verdict: pass, with one requirement added.** Machines on different
 networks connect, transfer, and verify their byte counts. The punch rate
-against mobile CGNAT is zero, which is bad and expected, and it does not
-change the choice of libp2p because no alternative punches a symmetric
-NAT either. It does change what the later steps must assume: a transfer
+is zero, which is *not* expected now that both NATs are known to be
+endpoint-independent, and the cause is ours to fix rather than the
+carriers' to explain. It does change what the later steps must assume: a transfer
 may run at relay speed for its whole life, so resume, progress and
 cancellation are load-bearing rather than polish, and step 11's metering
 is what stops one such transfer from spending a month of VPS egress.
