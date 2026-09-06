@@ -1,316 +1,272 @@
 # Ratatoskr — TODO
 
-See `PLAN.md` for the why. This file is the what, in order.
+`SPEC.md` is the requirement. `PLAN.md` is the design. `ALIGNMENT.md`
+records why the plan changed. This file is the what, in order.
 
-Rule: do not start a step until the one above it passes its check.
-
----
-
-## Step 0 — Two agents talk, no server ✅
-
-- [x] `go mod init github.com/achmadss/ratatoskr`
-- [x] Add `github.com/pion/webrtc/v4`
-- [x] `cmd/ratatoskr/main.go` with a subcommand router
-- [x] `internal/transport`: peer connection, one `ctrl` DataChannel
-- [x] `ratatoskr dev-offer` / `ratatoskr dev-answer`, SDP pasted by hand
-- [x] Echo any string received on `ctrl` back to the sender
-- [x] Report the selected ICE candidate pair on connect
-
-**Check:** a string comes back.
-**PASSED.** Both sides exit 0, pair reported as `direct: host <-> host`.
+Rule: do not start a step until the one above passes its check.
 
 ---
 
-## Step 1 — Device identity
+## Step 0 — libp2p echo
 
-- [ ] `internal/config`: per-OS config dir via `os.UserConfigDir()`
-- [ ] Create the dir at 0700 on first run
-- [ ] `internal/identity`: generate an Ed25519 keypair on first run
-- [ ] Write `identity.key` at mode 0600; refuse to start if it is world readable
-- [ ] Peer id = `base32(sha256(pubkey)[:16])`, lowercase, no padding, `rt-` prefix
-- [ ] Parse and format helpers, including the grouped display form
-- [ ] `Sign(msg)` and `Verify(peerID, pubkey, msg, sig)`; Verify must also
-      confirm the pubkey actually hashes to that peer id
-- [ ] `ratatoskr id` prints the peer id and the public key
-- [ ] Tests: id is stable across restarts; a mismatched pubkey fails Verify
+Replaces the Pion echo. That code is retired: the transport decision
+moved to libp2p, and `internal/transport` is rebuilt on it.
 
-**Check:** `ratatoskr id` prints the same id twice, and on all three machines.
+- [ ] Add `github.com/libp2p/go-libp2p`
+- [ ] Host with QUIC and TCP, Noise security, Ed25519 identity
+- [ ] Register `/ratatoskr/echo/1.0.0`
+- [ ] `ratatoskr dev-listen` prints its multiaddrs and waits
+- [ ] `ratatoskr dev-dial <multiaddr>` connects and echoes a string
+- [ ] Report the connection's transport, remote peer id and address
+- [ ] Confirm `CGO_ENABLED=0` still cross-builds every target
 
----
-
-## Step 2 — Mutual auth over the control channel
-
-- [ ] `internal/protocol`: envelope, version constant, request and reply types
-- [ ] `HELLO` carrying peer id, public key, nonce, version
-- [ ] Reject a version mismatch before anything else
-- [ ] `AUTH` signature over `"ratatoskr-auth-v1" || peer nonce || DTLS fingerprint`
-- [ ] Read the local DTLS fingerprint out of Pion and include it
-- [ ] Both directions must pass before any other message is served
-- [ ] `internal/config`: trusted peer list, persisted
-- [ ] `ratatoskr trust ID [--name N]`, `untrust`, `trusted`
-- [ ] Close the connection on: bad signature, id/pubkey mismatch, untrusted
-      id, auth timeout, any message sent before auth completes
-- [ ] Tests: tampered signature, replayed nonce, wrong peer id, unknown peer
-
-**Check:** an untrusted id is refused. A tampered signature is refused.
+**Check:** the string comes back, over QUIC, with the peer id verified by
+the Noise handshake.
 
 ---
 
-## Step 3 — heimdall
+## Step 1 — Identity and config
 
-- [ ] `cmd/heimdall/main.go`, flag `--addr`
-- [ ] `internal/signal`: message types shared by client and server
-- [ ] Server: WebSocket endpoint, nonce challenge on connect
-- [ ] Server: verify `register` signature and that pubkey hashes to the peer id
-- [ ] Server: peer registry; relay `offer` / `answer` / `ice` by peer id
-- [ ] Server: `not_found` and `peer_gone`
-- [ ] Server: ping every 20 s, drop after two misses
-- [ ] Server: re-`register` of a live peer id replaces the old socket
-- [ ] Server: rate limit per socket and per IP
-- [ ] `internal/discovery`: the `Discovery` interface
-- [ ] `internal/discovery/net`: heimdall client, reconnect with backoff
-- [ ] Trickle ICE: send candidates as they are gathered, do not wait
-- [ ] Wire `ratatoskr run` and `ratatoskr connect PEER_ID --via net`
-- [ ] Retire `dev-offer` and `dev-answer`
+- [ ] `internal/config`: per-OS dir via `os.UserConfigDir()`, created 0700
+- [ ] `internal/identity`: Ed25519 key on first run, `identity.key` at 0600
+- [ ] Refuse to start if the key file is group or world readable
+- [ ] Derive and cache the libp2p peer id
+- [ ] Short display fingerprint for the UI; full id in diagnostics only
+- [ ] `config.json`: shared folders with modes, trust list, device aliases
+- [ ] `ratatoskr id`
+- [ ] Tests: id stable across restarts; a corrupt key file fails loudly
 
-**Check:** `ratatoskr connect <id> --via net` links up with no pasting.
+**Check:** `ratatoskr id` prints the same id twice, on all three machines.
 
 ---
 
-## Step 4 — LAN discovery
+## Step 2 — mDNS discovery and LAN dial
 
-- [ ] Pick a pure-Go mDNS library; confirm no cgo (`CGO_ENABLED=0` build)
-- [ ] `internal/discovery/lan`: advertise `_ratatoskr._udp.local`
-- [ ] TXT record: `id`, `pk`, `sp` (signal port), `v`
-- [ ] Browse and filter by peer id
-- [ ] Local signal endpoint: `POST /v1/signal` on the LAN interface
-- [ ] The endpoint does exactly one thing: take an offer, return an answer
-- [ ] Rate limit it; cap concurrent handshakes; small body cap
+- [ ] libp2p mDNS discovery service, advertising the peer id
+- [ ] `internal/discovery`: the interface, plus the mDNS implementation
+- [ ] `ratatoskr discover` lists agents on this network
+- [ ] Dial a discovered peer by its LAN multiaddr, with no relay in the
+      dial set, so nothing leaves the network
+- [ ] `ratatoskr run` and `ratatoskr connect ID --via lan`
 - [ ] Re-advertise when the network interface changes
-- [ ] `ratatoskr discover` lists agents seen on this network
-- [ ] `ratatoskr connect PEER_ID --via lan` (no fallback)
-- [ ] Build LAN sessions with an empty ICE server list
-- [ ] Test on macOS, Windows and Linux; note every firewall prompt
-- [ ] Test with the router's Internet uplink physically unplugged
+- [ ] Test on macOS, Windows and Linux; record every firewall prompt
+- [ ] Test with the router's uplink physically unplugged
 
-**Check:** `discover` sees the other machine, and `--via lan` transfers with
-no Internet at all.
+**Check:** two machines find and connect to each other with no server and
+no Internet.
 
 ---
 
-## Step 5 — LAN-first discovery
+## Step 3 — NAT spike
 
-- [ ] Start mDNS at t=0; hold heimdall until t=400 ms
-- [ ] If the LAN answers in time, never open a heimdall session at all
-- [ ] LAN-discovered sessions use an **empty ICE server list**: host candidates
-      only, no STUN, no TURN — so nothing leaves the network
-- [ ] Internet-discovered sessions use the normal STUN/TURN list
-- [ ] Fall back to heimdall on either trigger: mDNS timeout, **or** peer found
-      on the LAN but the handshake with it failed
-- [ ] Cancel the loser cleanly; no leaked goroutine, socket or peer connection
-- [ ] Timeouts: mDNS ~500 ms, heimdall ~5 s
-- [ ] Record which method won and expose it in `status`
-- [ ] Both fail → one clear error, not two confusing ones
-- [ ] `--via lan` fails instead of falling back, so the offline test is real
-- [ ] Test: capture traffic and confirm zero packets leave the LAN on a local
-      connect
+The step that can genuinely fail, and the one that proves the libp2p
+choice. Do it before anything depends on the answer.
 
-**Check:** on a LAN, heimdall is never contacted. Multicast blocked falls
-through. A found-but-unreachable peer falls through. Neither path hangs.
+- [ ] `cmd/heimdall`: libp2p node with circuit relay v2 hop enabled
+- [ ] Deploy it to a VPS with a public address
+- [ ] Agent: enable AutoNAT, relay client, and DCUtR hole punching
+- [ ] Agent takes a relay reservation and prints its circuit multiaddr
+- [ ] Dial that circuit address from a different network
+- [ ] Log whether the connection stayed relayed or upgraded to direct,
+      and how long the upgrade took
+- [ ] **Measure and write down**: hole punch success rate, time to punch,
+      and MB/s on a 1 Gbps LAN and over the Internet
+- [ ] Test: home Wi-Fi to phone hotspot; macOS↔Windows↔Linux; both peers
+      behind the same NAT
+- [ ] Serve over the relay immediately, upgrade in the background
+
+**Check:** two machines on different networks connect, and the numbers
+exist on paper. If throughput or punch rate is bad, stop and reconsider
+here rather than at step 9.
 
 ---
 
-## Step 6 — File API, LIST and STAT
+## Step 4 — File API: read side
 
-- [ ] `internal/transport`: extract the `Transport` interface — `Call`,
-      `OpenStream`, `Path`, `Close`. Move the Pion code under `transport/webrtc`
-- [ ] `internal/transport/loopback`: in-process transport, so the whole file
-      layer is testable with no network at all
-- [ ] `internal/fileapi`: the verb surface. Nothing in it may import Pion
-- [ ] `PING` / `PONG` with round-trip time
+- [ ] `internal/protocol`: envelope, version, request and reply types
+- [ ] `internal/transport`: the `Transport` interface
+- [ ] `internal/transport/p2p`: streams over libp2p
+- [ ] `internal/transport/loopback`: in-process, so the file layer tests
+      with no network
+- [ ] `internal/fileapi`: the verbs. It must not import libp2p
 - [ ] `internal/fsroot`: clean, join, `EvalSymlinks`, verify inside root
-- [ ] `internal/fsroot`: the **write** variant — resolve the parent, then check
-      the final element has no separator
+- [ ] `internal/fsroot`: the write variant — resolve the parent, then
+      check the final element has no separator
 - [ ] `internal/fsroot` tests: `..`, absolute paths, symlink escape, null
-      bytes, Windows reserved names, alternate data streams, `\\?\` prefixes,
-      trailing dots and spaces
-- [ ] Shared roots carry a mode: `ro` or `rw`
-- [ ] `LIST` / `LIST_RESULT`, paged
-- [ ] `STAT` / `STAT_RESULT`
-- [ ] `DF` free space on a share
+      bytes, Windows reserved names, alternate data streams, `\\?\`
+      prefixes, trailing dots and spaces
+- [ ] `HELLO`, `PING`, `ROOTS`, `LIST` (paged), `STAT`, `DF`
+- [ ] Entry metadata including optional `created` and `mode`
+- [ ] Trust list enforced: an unknown peer id is refused
 - [ ] `ERROR` codes; never leak a real path or a stack trace
 - [ ] Enforce the 64 KB control message cap
-- [ ] `ratatoskr connect ID ls PATH`
 
-**Check:** a real directory prints over both transports. Every hostile path in
-the table is refused.
+**Check:** a real directory listing crosses the wire. Every hostile path
+in the table is refused, over both transports.
 
 ---
 
-## Step 7 — Agent control API
+## Step 5 — Control API and CLI
 
-- [ ] `internal/control`: HTTP server on `127.0.0.1`, random free port
-- [ ] Random token; write `control.json` at mode 0600
-- [ ] Bearer token check on every route
+- [ ] `internal/control`: HTTP on `127.0.0.1`, random free port
+- [ ] Random token; `control.json` at 0600; bearer check on every route
 - [ ] `GET /v1/status`, `/v1/peers`, `/v1/discover`, `/v1/events`
-- [ ] `GET|POST|DELETE /v1/folders` (with `--rw`) and `/v1/trusted`
-- [ ] Rewire every CLI subcommand as an HTTP client
+- [ ] `GET|POST|DELETE /v1/folders`, `/v1/trusted`
+- [ ] Device aliases, so `home:` resolves to a peer id
+- [ ] `ratatoskr ls home:/Documents`
+- [ ] Every subcommand becomes an HTTP client of the control API
 - [ ] Clear message when no agent is running
-- [ ] Verify the config dir path on all three OSes
+- [ ] Verify the config dir on all three OSes
 
-**Check:** `ratatoskr status` reports a running `ratatoskr run`.
+**Check:** `ratatoskr ls home:/Documents` prints a real listing.
 
 ---
 
-## Step 8 — Download a small file
+## Step 6 — Download
 
 - [ ] `READ` / `READ_OK` with size and BLAKE3 hash
-- [ ] `READ` with an offset and length — needed for resume, media seek and
-      type sniffing. Not optional, and cheap to add now
-- [ ] One `xfer-<id>` DataChannel per transfer
-- [ ] Frame format: uint32 sequence + payload, 16 KB chunks
-- [ ] Empty frame means end of stream, then close the channel
-- [ ] `CANCEL` from either side; both ends clean up
-- [ ] Receiver verifies the hash and fails loudly on a mismatch
+- [ ] `READ` with offset and length — needed for resume, seek and sniffing
+- [ ] `/ratatoskr/xfer/1.0.0`: header, then raw bytes to EOF
+- [ ] Backpressure is `io.CopyBuffer` with a 64 KB buffer. No credit
+      window — QUIC's stream flow control does the work
+- [ ] `CANCEL`, and closing the stream, both clean up on each side
+- [ ] Receiver verifies the whole-file hash before declaring success
 - [ ] Cap concurrent transfers per peer at 4
-- [ ] `ratatoskr connect ID get PATH OUT` with a progress line
-
-**Check:** a 10 MB file arrives and the hash matches.
-
----
-
-## Step 9 — Backpressure and a large file
-
-- [ ] Sender: `SetBufferedAmountLowThreshold` 256 KB, pause above 1 MB
-- [ ] `CREDIT`; receiver starts at 64 chunks, tops up at half spent
-- [ ] Sender blocks when credits run out
-- [ ] Receiver writes straight to disk; never buffers the whole file
 - [ ] Handle a file that shrinks, grows or vanishes mid-transfer
-- [ ] Measure and log throughput
-- [ ] Test: 10 GB over LAN, watch RSS on both sides
-- [ ] Test: 4 simultaneous transfers stay stable
-- [ ] `THUMBNAIL`: the agent renders a 256 px preview, so a gallery costs
-      kilobytes instead of megabytes
-- [ ] `COPY`: server-side. Prove a 4 GB copy moves ~200 bytes over the wire
+- [ ] `THUMB`: a 256 px preview rendered on the agent, pure-Go decoder
 - [ ] `HASH`: checksum a file without transferring it
+- [ ] `ratatoskr get home:/big.iso ./big.iso` with progress
+- [ ] Test: 10 GB, watching RSS on both sides
+- [ ] Test: 4 simultaneous transfers stay stable
 
-**Check:** 10 GB completes, memory flat on both sides. **Transport milestone.**
-
----
-
-## Step 10 — mimir, the control plane
-
-- [ ] `cmd/mimir`: HTTP service, database, sessions
-- [ ] Schema: accounts, devices, clients, shares, grants
-- [ ] Mimir signing keypair; publish its public key
-- [ ] `internal/grant`: issue and verify, shared by mimir and the agent
-- [ ] Pairing: agent shows a short-lived single-use code; `POST /v1/pair`
-      redeems it; agent pins mimir's public key
-- [ ] `ratatoskr pair CODE`
-- [ ] `GET /v1/devices` — requirement 1
-- [ ] `GET /v1/devices/{id}` — requirement 2
-- [ ] `POST /v1/devices/{id}/session` — signal ticket, grant, ICE servers
-- [ ] `GET|DELETE /v1/clients` — revoke a client
-- [ ] Heimdall accepts a mimir ticket as a `register`
-- [ ] Heimdall pushes presence to mimir; full reconcile every 30 s
-- [ ] `network_hint` from comparing public IPs — label it a hint, not a fact
-- [ ] Agent verifies grants: signature, device id, expiry, account, client key
-- [ ] Agent caches the last grant so a LAN connection survives a mimir outage
-- [ ] Tests: expired grant, wrong device, forged signature, revoked client
-
-**Check:** `GET /v1/devices` lists a paired machine with correct presence, and
-the agent accepts a real grant while refusing every forged one.
+**Check:** 10 GB completes, hash matches, memory flat on both sides.
 
 ---
 
-## Step 11 — Web app
+## Step 7 — Write operations
 
-- [ ] Client identity: WebCrypto Ed25519, **non-extractable**, in IndexedDB
-- [ ] Login, then device list and per-device status (requirements 1 and 2)
-- [ ] Browser WebRTC peer: heimdall via ticket, ctrl channel, HELLO + AUTH
-- [ ] `web/src/transport.ts` and `web/src/fileapi.ts` — the same interface and
-      verbs as the Go side
-- [ ] `web/src/fs-adapter.ts` — our verbs only. Nothing else touches the
-      file-manager library
-- [ ] Thumbnails in grid view come from `THUMBNAIL`, never from a full download
-- [ ] Mount `@cubone/react-file-manager` on the adapter
-- [ ] Service worker streaming download sink
-- [ ] File System Access API sink where available; feature-detect
-- [ ] Blob fallback for small files only
-- [ ] Progress, cancel, and browser-side backpressure
-- [ ] Status UI: Online / Local network / Direct / Relayed / Offline
-- [ ] Re-pair flow when the browser key is gone — one click
-- [ ] Test the streaming sink on Chrome, Firefox and Safari
-
-**Check:** log in, see the machines, open one, browse it, download a 5 GB file.
-**First usable release.**
-
----
-
-## Step 12 — Real NAT
-
-- [ ] Deploy heimdall and mimir to a VPS behind TLS
-- [ ] Public STUN configured
-- [ ] IPv6 enabled and confirmed to be tried
-- [ ] Report the measured path per session, from the real candidate pair
-- [ ] Test: home Wi-Fi to phone hotspot
-- [ ] Test: macOS↔Windows, macOS↔Linux, Windows↔Linux
-- [ ] Test: both peers behind the same NAT
-- [ ] Log connection type per session so the relay share can be counted
-
-**Check:** a direct connection forms across the Internet, proven by the log.
-
----
-
-## Step 13 — TURN fallback
-
-- [ ] coturn on the VPS, `use-auth-secret` mode
-- [ ] mimir mints short-lived TURN credentials per session
-- [ ] Listen on UDP, TCP and TLS 443
-- [ ] `--force-relay` test flag
-- [ ] Test: 1 GB transfer with STUN disabled
-- [ ] Rate limit relay use per account
-
-**Check:** a 1 GB file transfers over the relay only.
-
----
-
-## Step 14 — Write operations
-
-The first step that can destroy data. Section 10 of `PLAN.md` is the spec.
+The first step that can destroy data. `PLAN.md` §11 is the spec.
 
 - [ ] `ro` roots refuse every write before any path work happens
 - [ ] A grant may narrow a root's mode, never widen it
 - [ ] `internal/fsops`: atomic write — temp file in the destination dir,
       fsync file, fsync dir, rename over the target
 - [ ] Clean up stale temp files on startup
-- [ ] `WRITE` / `WRITE_OK`: upload reusing the xfer channel and credit window
+- [ ] `WRITE` / `WRITE_OK`, including at an offset
 - [ ] Free-space check and size cap before an upload starts
 - [ ] `MKDIR` — no `-p` by default; refuse if the parent is missing
-- [ ] `MOVE` — validate source and destination separately; both must be `rw`;
-      no overwrite without `overwrite: true`; cross-filesystem becomes
-      copy-then-delete with a hash check
-- [ ] `COPY` — server-side, same destination rules
-- [ ] `DELETE` — never recursive without `recursive: true`; never follow a
-      symlink out of the root; refuse to delete a share root
-- [ ] Wire all of it through `fs-adapter.ts` into the web UI
-- [ ] `ratatoskr connect ID put|mkdir|mv|rm`
-- [ ] Destructive-action tests: kill mid-upload, disk full, permission denied,
-      target vanished, symlinked destination, path traversal on every verb
+- [ ] `MOVE` — validate source and destination separately; both `rw`; no
+      overwrite without the flag; cross-filesystem becomes copy, verify,
+      delete
+- [ ] `COPY` — server-side. Prove a 4 GB copy moves ~200 bytes
+- [ ] `DELETE` — never recursive without the flag; never follow a symlink
+      out of a root; refuse to delete a share root
+- [ ] `ratatoskr put | mkdir | mv | rm`
+- [ ] Destructive tests: kill mid-upload, disk full, permission denied,
+      target vanished, symlinked destination, traversal on every verb
 
-**Check:** the whole of requirement 3. No half-written file survives a kill.
+**Check:** every write verb works, and no half-written file survives a
+kill.
 
 ---
 
-## Step 15 — Survival
+## Step 8 — WebDAV gateway
+
+- [ ] `internal/webdav` on `golang.org/x/net/webdav`, backed by the File API
+- [ ] Map PROPFIND, GET, PUT, MKCOL, MOVE, COPY, DELETE, HEAD, OPTIONS
+- [ ] `ratatoskr webdav --addr 127.0.0.1:9832`, one path prefix per device
+- [ ] Ranged GET, so media players and resume work
+- [ ] Locking: null-lock only unless a client proves it needs more
+- [ ] Test with Finder, Windows Explorer, rclone and Cyberduck
+- [ ] Document the mount instructions for each
+
+**Check:** Finder mounts it, browses, downloads and uploads.
+
+---
+
+## Step 9 — Resume and recovery
+
+- [ ] `internal/transfer`: persisted records in `transfers/`
+- [ ] Download resume: re-`STAT`, compare size, mtime and hash, then
+      `READ` at the offset; discard rather than append to a stale partial
+- [ ] Upload resume: `STAT` the remote temp, `HASH` the prefix, compare,
+      then `WRITE` at the offset
+- [ ] Automatic retry with backoff on a dropped connection, no prompt
+- [ ] Surface a failure only after the retry budget is spent
+- [ ] Clean up stale `.rtpart` files on startup
+- [ ] `ratatoskr transfers [resume ID | cancel ID]`
+- [ ] Test: unplug the cable at 40% of a 10 GB transfer, replug, verify
+- [ ] Test: restart the process mid-transfer, verify
+- [ ] Test: change the source file mid-transfer, confirm it restarts
+      rather than corrupting
+
+**Check:** a 10 GB transfer survives an unplugged cable and the resulting
+file's hash is correct.
+
+---
+
+## Step 10 — mimir
+
+- [ ] `cmd/mimir`: HTTP service, database, sessions
+- [ ] Schema: accounts, devices, addresses, shares, grants
+- [ ] Mimir signing keypair; publish its public key
+- [ ] `internal/grant`: issue and verify, shared with the agent
+- [ ] Pairing: agent shows a short-lived single-use code; `POST /v1/pair`
+      redeems it; the agent pins mimir's public key
+- [ ] `PUT /v1/self/addrs` — the agent publishes its multiaddrs on change
+- [ ] `GET /v1/devices`, `/v1/devices/{id}`, `/v1/devices/{id}/addrs`
+- [ ] `POST /v1/devices/{id}/grant`
+- [ ] Presence from agent heartbeats and heimdall reservations;
+      `unknown` when mimir cannot tell
+- [ ] Agent verifies grants: signature, device, expiry, account, and that
+      `client` equals the peer id libp2p already authenticated
+- [ ] Agent caches the last grant so LAN use survives a mimir outage
+- [ ] `network_hint` from comparing public IPs — a hint, never a fact
+- [ ] `ratatoskr pair CODE`, `ratatoskr devices`
+- [ ] Tests: expired grant, wrong device, forged signature, revoked device
+
+**Check:** `ratatoskr devices` lists a paired machine, and `ls` works
+against it from a different network.
+
+---
+
+## Step 11 — heimdall in production
+
+- [ ] Relay reservations with sensible limits per account
+- [ ] Rate limit and meter relayed bytes
+- [ ] Report relay use to mimir, so the bill can be predicted
+- [ ] TLS-terminated WebSocket transport for UDP-blocked networks
+- [ ] Confirm heimdall cannot decrypt anything it forwards
+
+**Check:** a 1 GB relayed transfer works, is counted, and is visibly
+slower than direct in the status UI.
+
+---
+
+## Step 12 — Local web UI
+
+- [ ] Static page served by ratatoskr on `127.0.0.1`
+- [ ] Device list with presence and measured path
+- [ ] `web/src/fs-adapter.ts` — our verbs only; the only file the
+      file-manager library touches
+- [ ] Mount `@cubone/react-file-manager` on the adapter
+- [ ] Thumbnails from `THUMB`, never from a full download
+- [ ] Transfer list with progress, cancel and resume
+- [ ] Status wording: Online / Local network / Direct / Relayed / Offline.
+      No QUIC, DCUtR, multiaddr or circuit anywhere in the UI
+
+**Check:** browse, download and upload from a browser on `127.0.0.1`.
+
+---
+
+## Step 13 — Survival
 
 - [ ] Sleep and wake the agent machine
-- [ ] Switch Wi-Fi to hotspot mid-connection; ICE restart
+- [ ] Switch Wi-Fi to hotspot mid-connection
 - [ ] Move between LAN and Internet; discovery re-picks the right path
-- [ ] Restart the agent; re-register the same peer id
-- [ ] Restart heimdall; everything reconnects
-- [ ] mimir down: existing grants still work on the LAN; UI says so
-- [ ] Cancel a transfer at 50%; both sides clean up
+- [ ] Restart the agent; addresses republish; peers reconnect
+- [ ] Restart heimdall; reservations are retaken
+- [ ] mimir down: existing grants still work on the LAN; the UI says so
 - [ ] Kill the client mid-transfer; the agent frees the file handle
 - [ ] Every failure path ends in a working connection or an honest error.
       Never a hang.
@@ -319,18 +275,17 @@ The first step that can destroy data. Section 10 of `PLAN.md` is the spec.
 
 ---
 
-## Step 16 — Mobile app
+## Step 14 — Mobile app
 
-- [ ] Client identity in Keychain / Keystore
-- [ ] WebRTC peer, same protocol
-- [ ] LAN discovery — mobile **can** do this, unlike the web
-- [ ] iOS: local network permission + multicast entitlement
-- [ ] Android: NSD
+- [ ] Embed the client library
+- [ ] Identity in Keychain / Keystore
+- [ ] mDNS: iOS local network permission and multicast entitlement;
+      Android NSD
 - [ ] File manager UI, built rather than adopted
 - [ ] Background transfer behaviour on both platforms
 
-**Check:** browse and transfer over the LAN with the phone in aeroplane mode
-apart from Wi-Fi.
+**Check:** browse and transfer over the LAN with the phone offline apart
+from Wi-Fi.
 
 ---
 
@@ -340,13 +295,14 @@ apart from Wi-Fi.
 - [x] `CGO_ENABLED=0` enforced in the Makefile
 - [ ] `CGO_ENABLED=0` enforced in CI
 - [ ] `go vet` and `staticcheck` clean
-- [ ] Structured logging with levels; `--verbose` for ICE and discovery detail
-- [ ] Unit tests beside each package. `internal/identity`, `internal/fsroot`
-      and `internal/protocol` are the ones that must be thorough
-- [ ] `README.md` once step 9 passes
+- [ ] Pin libp2p versions; review before every bump
+- [ ] Structured logging; `--verbose` for dial, discovery and hole-punch detail
+- [ ] Unit tests beside each package. `identity`, `fsroot`, `protocol`,
+      `grant` and `transfer` must be thorough
+- [ ] `README.md` once step 8 passes
 
 ## Deliberately not now
 
-`ratatoskr mount` (local WebDAV bridge) · desktop UI wrapper · installers and
-autostart · file index and search · version history · sync · sharing between
-accounts · public links · thumbnails · browser on a LAN with no Internet
+Zero-install browser access · SFTP, FUSE and SMB adapters · search across
+devices · version history · sync · sharing between accounts · public
+links · tray launcher · installers and autostart
