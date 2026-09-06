@@ -62,10 +62,18 @@ func punchQUIC(role string) error {
 	// telling them apart used to need a second machine, a second operator
 	// and a capture. quic.Transport takes the socket over, so the count
 	// has to be taken before it does.
-	raw := rawPunch(c, peer, config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second))
-	fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
-	if raw == 0 {
-		fmt.Println("  the path is shut, so this run says nothing about QUIC.")
+	// Setting the window to zero makes QUIC the first thing this socket
+	// ever sends to the peer, which is the one condition the agent is
+	// always in and this test never was.
+	raw := -1
+	if w := config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second); w > 0 {
+		raw = rawPunch(c, peer, w)
+		fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
+		if raw == 0 {
+			fmt.Println("  the path is shut, so this run says nothing about QUIC.")
+		}
+	} else {
+		fmt.Print("\nskipping the bare punch: QUIC goes first, as it does in the agent.\n")
 	}
 
 	tr := &quic.Transport{Conn: c}
@@ -102,7 +110,12 @@ func punchQUIC(role string) error {
 	if err := speakQUIC(ctx, tr, peer, role); err != nil {
 		close(stop)
 		fmt.Printf("  no QUIC connection: %v\n\n", err)
-		if raw > 0 {
+		if raw < 0 {
+			fmt.Println("QUIC went first and got nowhere. Run it again with the bare punch")
+			fmt.Println("in front: if that succeeds, the path only opens for a flow that")
+			fmt.Println("does not begin with a QUIC handshake, and the agent must open it")
+			fmt.Println("the same way before DCUtR dials.")
+		} else if raw > 0 {
 			fmt.Println("Bare packets crossed this path seconds ago and a handshake could")
 			fmt.Println("not. The path passes datagrams but not QUIC, and no library or")
 			fmt.Println("configuration would have got through it.")
