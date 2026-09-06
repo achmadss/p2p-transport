@@ -1,7 +1,7 @@
 # Ratatoskr — TODO
 
-`SPEC.md` is the requirement. `PLAN.md` is the design. `ALIGNMENT.md`
-records why the plan changed. This file is the what, in order.
+`SPEC.md` is the requirement. `PLAN.md` is the design. This file is the
+what, in order. The spec's MVP (§28) is complete at step 11.
 
 Rule: do not start a step until the one above passes its check.
 
@@ -96,7 +96,10 @@ here rather than at step 9.
       bytes, Windows reserved names, alternate data streams, `\\?\`
       prefixes, trailing dots and spaces
 - [ ] `HELLO`, `PING`, `ROOTS`, `LIST` (paged), `STAT`, `DF`
-- [ ] Entry metadata including optional `created` and `mode`
+- [ ] Entry metadata: name, root-relative `path`, kind, size, modified,
+      optional `created` and `mode`, `symlink`
+- [ ] `path` is always what the client asked through, never a resolved
+      absolute path, which would leak the machine's layout
 - [ ] Trust list enforced: an unknown peer id is refused
 - [ ] `ERROR` codes; never leak a real path or a stack trace
 - [ ] Enforce the 64 KB control message cap
@@ -159,8 +162,9 @@ The first step that can destroy data. `PLAN.md` §11 is the spec.
       overwrite without the flag; cross-filesystem becomes copy, verify,
       delete
 - [ ] `COPY` — server-side. Prove a 4 GB copy moves ~200 bytes
-- [ ] `DELETE` — never recursive without the flag; never follow a symlink
-      out of a root; refuse to delete a share root
+- [ ] `DELETE` — files and directories; a non-empty directory needs
+      `recursive: true`; never follow a symlink out of a root; refuse to
+      delete a share root
 - [ ] `ratatoskr put | mkdir | mv | rm`
 - [ ] Destructive tests: kill mid-upload, disk full, permission denied,
       target vanished, symlinked destination, traversal on every verb
@@ -175,6 +179,9 @@ kill.
 - [ ] `internal/webdav` on `golang.org/x/net/webdav`, backed by the File API
 - [ ] Map PROPFIND, GET, PUT, MKCOL, MOVE, COPY, DELETE, HEAD, OPTIONS
 - [ ] `ratatoskr webdav --addr 127.0.0.1:9832`, one path prefix per device
+      (`http://127.0.0.1:9832/home-laptop/Documents/`)
+- [ ] Bind loopback only. A public WebDAV URL would put that server on the
+      data path
 - [ ] Ranged GET, so media players and resume work
 - [ ] Locking: null-lock only unless a client proves it needs more
 - [ ] Test with Finder, Windows Explorer, rclone and Cyberduck
@@ -213,7 +220,8 @@ file's hash is correct.
 - [ ] `internal/grant`: issue and verify, shared with the agent
 - [ ] Pairing: agent shows a short-lived single-use code; `POST /v1/pair`
       redeems it; the agent pins mimir's public key
-- [ ] `PUT /v1/self/addrs` — the agent publishes its multiaddrs on change
+- [ ] `PUT /v1/self/addrs` — the agent publishes its multiaddrs on change,
+      each tagged with its transport (quic|tcp|ws)
 - [ ] `GET /v1/devices`, `/v1/devices/{id}`, `/v1/devices/{id}/addrs`
 - [ ] `POST /v1/devices/{id}/grant`
 - [ ] Presence from agent heartbeats and heimdall reservations;
@@ -223,6 +231,10 @@ file's hash is correct.
 - [ ] Agent caches the last grant so LAN use survives a mimir outage
 - [ ] `network_hint` from comparing public IPs — a hint, never a fact
 - [ ] `ratatoskr pair CODE`, `ratatoskr devices`
+- [ ] Revocation: mimir stops issuing grants, drops addresses, heimdall
+      refuses the reservation — and the UI states honestly that an offline
+      agent takes effect within the grant lifetime
+- [ ] Keep grant lifetime at one hour, so the revocation window is small
 - [ ] Tests: expired grant, wrong device, forged signature, revoked device
 
 **Check:** `ratatoskr devices` lists a paired machine, and `ls` works
@@ -236,7 +248,9 @@ against it from a different network.
 - [ ] Rate limit and meter relayed bytes
 - [ ] Report relay use to mimir, so the bill can be predicted
 - [ ] TLS-terminated WebSocket transport for UDP-blocked networks
-- [ ] Confirm heimdall cannot decrypt anything it forwards
+- [ ] Confirm heimdall cannot decrypt anything it forwards, and record
+      what it unavoidably does learn: which peer ids talked, when, and how
+      many bytes
 
 **Check:** a 1 GB relayed transfer works, is counted, and is visibly
 slower than direct in the status UI.

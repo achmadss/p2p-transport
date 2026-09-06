@@ -2,7 +2,8 @@
 
 Module path: `github.com/achmadss/ratatoskr`
 
-Aligned to `SPEC.md`. `ALIGNMENT.md` records what changed and why.
+`SPEC.md` is the requirement. This is the design that satisfies it.
+`TODO.md` is the ordered work.
 
 ---
 
@@ -192,7 +193,19 @@ Two protocol IDs. No shared channel, no framing games.
 A transfer opens its own stream, writes a small header, then streams the
 body. Cancelling is closing the stream. A slow reader is handled by QUIC.
 
-### 4.4 Known rough edges
+### 4.4 The relay cannot read anything
+
+Spec §6 and §30.3 require end-to-end encryption even over the relay.
+Circuit relay v2 satisfies this by construction: the Noise session runs
+between the two peers, and heimdall forwards an already-encrypted byte
+stream. It terminates nothing, holds no session key, and cannot tell a
+directory listing from a photograph.
+
+What heimdall does learn, and cannot avoid learning: which two peer ids
+are talking, when, and how many bytes. That is the honest limit of any
+relay, and it is worth writing down rather than implying otherwise.
+
+### 4.5 Known rough edges
 
 Hole punching is not instant and does not always work — libp2p's own
 issue tracker has open reports of multi-second punches. This is the same
@@ -469,6 +482,7 @@ both
 ```json
 {
   "name": "movie.mkv",
+  "path": "/Videos/movie.mkv",
   "kind": "file",
   "size": 4294967296,
   "modified": "2026-09-05T08:00:00Z",
@@ -478,8 +492,17 @@ both
 }
 ```
 
+`path` is always root-relative and always the path the client asked
+through — never a resolved absolute path, which would leak the layout of
+the machine.
+
 `created` and `mode` are optional. Creation time is not portable across
 filesystems, and it must be allowed to be absent rather than faked.
+
+`DELETE` covers both files and directories; a directory needs
+`recursive: true` unless it is already empty. Spec §11 lists them
+separately; one verb with an explicit flag is safer than two verbs, one
+of which is quietly destructive.
 
 ### 9.3 Transfer stream — `/ratatoskr/xfer/1.0.0`
 
@@ -638,7 +661,8 @@ way this system gets breached.
 ```
 accounts     id, email, auth
 devices      id (peer id), account, public key, name, os, created, last_seen
-addresses    device, multiaddr, kind (direct|circuit), updated
+addresses    device, multiaddr, kind (direct|circuit), transport
+             (quic|tcp|ws), updated
 shares       device, path, mode          advertised, so the UI can preview
 grants       issued grants, for revocation and audit
 ```
@@ -659,7 +683,28 @@ POST   /v1/pair                  redeem a pairing code
 PUT    /v1/self/addrs            an agent publishes its addresses
 ```
 
-### 13.3 Presence
+### 13.3 Revoking a device
+
+Spec §14 requires it. Two things happen, and they take effect at
+different speeds.
+
+1. **Immediately.** Mimir stops issuing grants for that device, drops its
+   addresses, and heimdall refuses its relay reservation. It disappears
+   from every device list and can no longer be found.
+2. **Within the grant lifetime.** Agents that already hold a valid grant
+   naming that device keep honouring it until it expires.
+
+That lag is the price of letting an agent authorise without phoning home,
+which is what makes offline LAN use work. Keep grant lifetimes short —
+one hour — so the window is small, and offer `ratatoskr untrust` as the
+immediate local override for an agent that is reachable.
+
+An account-wide "revoke everything" must therefore also push to any
+agent that is currently online, and be honest in the UI about offline
+agents: *revoked; will take effect when the machine next comes online, or
+within the hour.*
+
+### 13.4 Presence
 
 Heimdall knows who holds a relay reservation. Agents also heartbeat to
 mimir directly. Presence is `online` when either says so, `unknown` when
@@ -732,7 +777,16 @@ POST /v1/pair
 ```
 
 The WebDAV gateway on `127.0.0.1:9832` is a second adapter over the same
-File API.
+File API, with one path prefix per device, exactly as spec §26 describes:
+
+```
+http://127.0.0.1:9832/home-laptop/Documents/
+http://127.0.0.1:9832/desktop/Projects/
+```
+
+Binding to loopback is what keeps the design honest. A WebDAV endpoint on
+a public URL would put that server on the data path, which is the thing
+this project exists to avoid.
 
 ---
 
@@ -815,7 +869,7 @@ ratatoskr/
 │   ├── control/       127.0.0.1 HTTP API
 │   └── config/        per-OS paths, folders, trust list, aliases
 ├── web/               the local UI, served from 127.0.0.1
-├── Makefile · PLAN.md · SPEC.md · ALIGNMENT.md · TODO.md · go.mod
+├── Makefile · SPEC.md · PLAN.md · TODO.md · go.mod
 ```
 
 One module, three binaries, sharing `internal/protocol`,
@@ -852,6 +906,51 @@ it is where the libp2p choice is proved or disproved. Do not build steps
 4 to 9 on an unmeasured assumption about throughput.
 
 Step 7 is where a bug can destroy data.
+
+### 19.1 Where the spec's MVP lands
+
+Spec §28 defines the MVP. It is complete at **step 11**.
+
+| Spec §28 requirement | Step |
+|----------------------|------|
+| Coordinator: user authentication | 10 |
+| Coordinator: device registration | 10 |
+| Coordinator: device discovery | 2 (LAN), 10 (Internet) |
+| Coordinator: presence | 10 |
+| Coordinator: signaling | not needed — libp2p dials addresses |
+| Agent: device identity | 1 |
+| Agent: filesystem access | 4, 7 |
+| Agent: P2P listener | 0, 2 |
+| Agent: file protocol | 4, 6, 7 |
+| Agent: basic authorization | 4 (trust list), 10 (grants) |
+| Client: device list | 5 (local), 10 (account) |
+| Client: device connection | 2, 3 |
+| Client: directory browsing | 4, 5 |
+| Client: download | 6 |
+| Client: upload | 7 |
+| Client: rename, delete, create directory | 7 |
+| WebDAV: local endpoint and translation | 8 |
+| Networking: LAN direct | 2 |
+| Networking: Internet direct | 3 |
+| Networking: NAT traversal | 3 |
+| Networking: relay fallback | 3, 11 |
+
+Steps 12 to 14 are beyond the spec's MVP.
+
+### 19.2 One spec goal the MVP does not reach
+
+Spec §12 wants installation to feel like:
+
+```
+Install -> Sign in -> Device appears online
+```
+
+Through step 11 the agent is started from a terminal. Installers,
+autostart and a tray launcher are in §22, after the MVP. This is a
+packaging problem rather than an architectural one, and none of the work
+above assumes a terminal — `ratatoskr run` is already a well-behaved
+background process with a control API — but the goal is not met until
+that packaging exists. Worth stating rather than quietly missing.
 
 ---
 
