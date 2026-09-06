@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/achmadss/ratatoskr/internal/config"
 	"github.com/achmadss/ratatoskr/internal/stun"
 )
 
@@ -75,42 +76,84 @@ func punchtest() error {
 		return fmt.Errorf("not an address: %w", err)
 	}
 
-	fmt.Printf("\nsending to %s every 300ms for 30s, and printing anything that arrives.\n\n", peer)
+	// Ask again now that the waiting is over. A keepalive holds the
+	// mapping open but cannot promise the carrier kept the same external
+	// port, and an address that went stale while it was being carried to
+	// the other machine would fail the test for a reason that has
+	// nothing to do with punching.
+	if r := stun.Ask(c, keepalive.String()); r.Err == nil && r.Mapped != mapped {
+		fmt.Printf("\n  WARNING: my address changed while waiting, %s -> %s\n", mapped, r.Mapped)
+		fmt.Println("  the other machine is aiming at the old one; start over.")
+	}
 
-	stop := time.Now().Add(30 * time.Second)
+	// Two people typing addresses to each other cannot start within
+	// thirty seconds of one another reliably, and a test that fails on
+	// that looks exactly like a test that failed on the network. The
+	// side that can wait longer should.
+	stop := time.Now().Add(config.Duration("RATATOSKR_PUNCH_SECONDS", 30*time.Second))
+
+	fmt.Printf("\nsending to %s every 300ms until %s, and printing anything that arrives.\n\n", peer, stop.Format("15:04:05"))
+
+	// Two sizes, because that is the last difference left between this
+	// test and libp2p. A QUIC handshake packet is padded to 1200 bytes
+	// and this one was fifteen, so if the small packets land and the
+	// large ones do not, the carrier has a size limit and no amount of
+	// hole punching is the problem.
+	small := append([]byte{'S'}, make([]byte, 14)...)
+	large := append([]byte{'L'}, make([]byte, 1279)...)
+	sizes := [][]byte{small, large}
+	if n := config.Int("RATATOSKR_PUNCH_BYTES", 0); n > 0 {
+		sizes = [][]byte{append([]byte{'S'}, make([]byte, n-1)...)}
+		if n > 640 {
+			sizes[0][0] = 'L'
+		}
+	}
+
 	go func() {
 		for time.Now().Before(stop) {
-			if _, err := c.WriteToUDP([]byte("ratatoskr punch"), peer); err != nil {
-				fmt.Printf("  send failed: %v\n", err)
+			for _, p := range sizes {
+				if _, err := c.WriteToUDP(p, peer); err != nil {
+					fmt.Printf("  send failed: %v\n", err)
+				}
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
 	}()
 
-	got := 0
-	buf := make([]byte, 1500)
+	var gotSmall, gotLarge int
+	buf := make([]byte, 2000)
 	for time.Now().Before(stop) {
 		c.SetReadDeadline(stop)
 		n, from, err := c.ReadFromUDP(buf)
 		if err != nil {
 			break
 		}
-		if !from.IP.Equal(peer.IP) {
+		if !from.IP.Equal(peer.IP) || n == 0 {
 			continue // a reflector answering the keepalive, not a punch
 		}
-		got++
-		if got <= 3 {
+		if buf[0] == 'L' {
+			gotLarge++
+		} else {
+			gotSmall++
+		}
+		if gotSmall+gotLarge <= 2 {
 			fmt.Printf("  RECEIVED %d bytes from %s\n", n, from)
 		}
 	}
 
-	fmt.Println()
-	if got == 0 {
+	fmt.Printf("\n  small (15 bytes):   %d arrived\n", gotSmall)
+	fmt.Printf("  large (1280 bytes): %d arrived\n\n", gotLarge)
+	switch {
+	case gotSmall == 0 && gotLarge == 0:
 		fmt.Println("nothing arrived. Either the far side never sent, or a NAT on the")
-		fmt.Println("path drops punched packets. Compare with the other machine's count.")
-	} else {
-		fmt.Printf("%d packets arrived. The path punches, so the fault is in how we\n", got)
-		fmt.Println("configure libp2p, not in the carriers.")
+		fmt.Println("path drops punched packets outright.")
+	case gotLarge == 0:
+		fmt.Println("only the small packets survived. The path punches, but something")
+		fmt.Println("on it drops a packet the size of a QUIC handshake — which is every")
+		fmt.Println("packet libp2p punches with.")
+	default:
+		fmt.Println("both sizes arrived. The path punches at libp2p's own packet size,")
+		fmt.Println("so the fault is in how we drive libp2p, not in the carriers.")
 	}
 	return nil
 }
