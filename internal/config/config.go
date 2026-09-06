@@ -31,30 +31,26 @@ const (
 // The directory is 0700 because identity.key lives in it. A 0600 key
 // inside a 0755 directory is still readable by anyone who can list the
 // directory on some systems, so the directory carries the same
-// restriction as the file.
+// restriction as the file. MkdirAll leaves an existing directory's mode
+// alone, hence the Chmod.
 func Dir() (string, error) {
-	if d := os.Getenv(EnvDir); d != "" {
-		return d, ensureDir(d)
+	d := os.Getenv(EnvDir)
+	if d == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("no config directory on this system: %w", err)
+		}
+		d = filepath.Join(base, "ratatoskr")
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("no config directory on this system: %w", err)
-	}
-	d := filepath.Join(base, "ratatoskr")
-	return d, ensureDir(d)
-}
-
-func ensureDir(d string) error {
 	if err := os.MkdirAll(d, dirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", d, err)
+		return "", fmt.Errorf("create %s: %w", d, err)
 	}
-	// MkdirAll leaves an existing directory's mode alone, so tighten it.
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(d, dirPerm); err != nil {
-			return fmt.Errorf("secure %s: %w", d, err)
+			return "", fmt.Errorf("secure %s: %w", d, err)
 		}
 	}
-	return nil
+	return d, nil
 }
 
 // Path returns the full path of a file inside the config directory.
@@ -174,9 +170,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// Save writes config.json atomically: a temp file in the same directory,
-// fsynced, then renamed over the old one. A half-written config would
-// mean a machine that will not start.
+// Save writes config.json.
 func (c *Config) Save() error {
 	p, err := Path(fileName)
 	if err != nil {
@@ -187,51 +181,5 @@ func (c *Config) Save() error {
 		return fmt.Errorf("encode config: %w", err)
 	}
 	b = append(b, '\n')
-	return writeFileAtomic(p, b, filePerm)
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once the rename below succeeds
-
-	if err := f.Chmod(perm); err != nil {
-		f.Close()
-		return fmt.Errorf("set permissions on %s: %w", tmp, err)
-	}
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write %s: %w", tmp, err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("sync %s: %w", tmp, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace %s: %w", path, err)
-	}
-	return syncDir(dir)
-}
-
-// syncDir makes the rename itself durable. Without it a crash can leave
-// the directory entry pointing at the old file.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", dir, err)
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil && runtime.GOOS != "windows" {
-		// Windows cannot fsync a directory handle opened this way, and
-		// reports an error for it. Elsewhere the failure is real.
-		return fmt.Errorf("sync %s: %w", dir, err)
-	}
-	return nil
+	return os.WriteFile(p, b, filePerm)
 }

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	"github.com/achmadss/ratatoskr/internal/config"
@@ -79,27 +78,6 @@ func LoadOrCreate() (*Identity, error) {
 	}
 }
 
-// Load returns the identity but refuses to create one. Commands that
-// must not silently mint a new identity for a mistyped config directory
-// use this.
-func Load() (*Identity, error) {
-	path, err := config.Path(FileName)
-	if err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no identity yet: run `ratatoskr id` to create one")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	if err := checkPerm(path); err != nil {
-		return nil, err
-	}
-	return fromBytes(b, path)
-}
-
 func create(path string) (*Identity, error) {
 	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
 	if err != nil {
@@ -109,51 +87,14 @@ func create(path string) (*Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode key: %w", err)
 	}
-	if err := writeKey(path, b); err != nil {
-		return nil, err
+	if err := os.WriteFile(path, b, keyPerm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
 	id, err := peer.IDFromPrivateKey(priv)
 	if err != nil {
 		return nil, fmt.Errorf("derive peer id: %w", err)
 	}
 	return &Identity{priv: priv, id: id}, nil
-}
-
-// writeKey creates the file with O_EXCL so a concurrent first run cannot
-// have two processes each generate a key and one overwrite the other.
-// Losing that race would change the peer id under a running agent.
-func writeKey(path string, b []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyPerm)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("another process created %s at the same time; try again", path)
-		}
-		return fmt.Errorf("create %s: %w", path, err)
-	}
-	defer f.Close()
-
-	if _, err := f.Write(b); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync %s: %w", path, err)
-	}
-	return syncDir(filepath.Dir(path))
-}
-
-func syncDir(dir string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", dir, err)
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil {
-		return fmt.Errorf("sync %s: %w", dir, err)
-	}
-	return nil
 }
 
 // fromBytes fails loudly. A key file that does not parse is either
@@ -166,9 +107,6 @@ func fromBytes(b []byte, path string) (*Identity, error) {
 	priv, err := crypto.UnmarshalPrivateKey(b)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a valid key: %w", path, err)
-	}
-	if priv.Type() != crypto.Ed25519 {
-		return nil, fmt.Errorf("%s holds a %s key, but Ratatoskr uses Ed25519", path, priv.Type())
 	}
 	id, err := peer.IDFromPrivateKey(priv)
 	if err != nil {

@@ -120,16 +120,6 @@ func TestCorruptKeyFailsLoudly(t *testing.T) {
 	}
 }
 
-func TestLoadDoesNotCreate(t *testing.T) {
-	dir := isolate(t)
-	if _, err := Load(); err == nil {
-		t.Fatal("Load created or accepted a missing identity")
-	}
-	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
-		t.Fatal("Load wrote a key file; only LoadOrCreate may do that")
-	}
-}
-
 func TestFingerprintIsShortAndDerivedFromTheID(t *testing.T) {
 	isolate(t)
 	id, err := LoadOrCreate()

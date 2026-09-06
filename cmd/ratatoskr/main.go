@@ -90,7 +90,7 @@ func devListen() error {
 	if err != nil {
 		return err
 	}
-	h, err := transport.New(transport.Options{Key: id.PrivateKey()})
+	h, err := transport.New(id.PrivateKey())
 	if err != nil {
 		return err
 	}
@@ -106,9 +106,13 @@ func devListen() error {
 		}
 	})
 
+	addrs, err := h.Addrs()
+	if err != nil {
+		return err
+	}
 	fmt.Println("peer id:", h.ID())
 	fmt.Println("dial one of:")
-	for _, a := range h.Addrs() {
+	for _, a := range addrs {
 		fmt.Println("  ", a)
 	}
 
@@ -124,7 +128,7 @@ func devDial(addr string) error {
 	if err != nil {
 		return err
 	}
-	h, err := transport.New(transport.Options{Key: id.PrivateKey()})
+	h, err := transport.New(id.PrivateKey())
 	if err != nil {
 		return err
 	}
