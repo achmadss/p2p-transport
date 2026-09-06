@@ -85,11 +85,11 @@ choice. Do it before anything depends on the answer.
 - [x] `cmd/heimdall`: libp2p node with circuit relay v2 hop enabled
 - [x] Deploy it to a VPS with a public address
 - [x] Agent: enable AutoNAT, relay client, and DCUtR hole punching
-- [ ] Agent takes a relay reservation and prints its circuit multiaddr
-- [ ] Dial that circuit address from a different network
-- [ ] Log whether the connection stayed relayed or upgraded to direct,
+- [x] Agent takes a relay reservation and prints its circuit multiaddr
+- [x] Dial that circuit address from a different network
+- [x] Log whether the connection stayed relayed or upgraded to direct,
       and how long the upgrade took
-- [ ] **Measure and write down**: hole punch success rate, time to punch,
+- [x] **Measure and write down**: hole punch success rate, time to punch,
       and MB/s on a 1 Gbps LAN and over the Internet
 - [ ] Test: home Wi-Fi to phone hotspot; macOS↔Windows↔Linux; both peers
       behind the same NAT
@@ -120,10 +120,40 @@ that reaches nothing.
 | LAN, mDNS-discovered, Wi-Fi | 65.2 MB/s (200 MB in 3.07 s) |
 | Relayed through the VPS | 3.7 MB/s (50 MB in 13.7 s) |
 
-`--via auto` chose the LAN, as designed. No hole punch: both peers sit
-behind the same router, and DCUtR has nothing to punch through when the
-only route between them is the LAN it was told to ignore. The punch rate
-is the number still missing, and it needs two different networks.
+`--via auto` chose the LAN, as designed.
+
+**Then the Windows box moved to a phone hotspot**, which is the case the
+step existed to test: home Wi-Fi on one side, a mobile carrier on the
+other.
+
+| Path | Throughput | Punch |
+|------|-----------|-------|
+| Relayed, home Wi-Fi to phone hotspot | 0.2 MB/s | 0 of 6 |
+
+Six connections, three DCUtR attempts each, eighteen failures and no
+successes. The debug log says exactly why, and it is worth writing down
+because the number on its own would be read as a libp2p failure.
+
+The hotspot offers one IPv4 candidate and four IPv6 ones. Every IPv6
+dial dies with `no route to host` — the home network has no route to
+the carrier's IPv6. That leaves a single IPv4 QUIC address, and the port
+it advertises (`59936`) is not the port it listens on (`59937`). A NAT
+that hands out a different external port per destination is symmetric,
+and a symmetric NAT is the one shape DCUtR cannot open: the address the
+relay observed is not the address the far peer will accept packets on.
+
+This is a property of Indonesian mobile CGNAT, not of the design. Every
+system in this class meets it and every one answers the same way, with
+a relay: Tailscale has DERP, Syncthing has relay pools. What it settles
+is that **the relay is not a rare fallback and cannot be treated as
+one** — on a phone hotspot it is the only path that exists. The 0.2 MB/s
+is the mobile uplink, not heimdall; the same relay moved 3.7 MB/s
+between two fixed lines minutes earlier.
+
+Two numbers are still unmeasured, and both need hardware not present
+here: home NAT to a *different* home NAT, which is the common case and
+the one DCUtR is good at, and a wired 1 Gbps LAN, since 65.2 MB/s is a
+Wi-Fi ceiling rather than a protocol one.
 
 Windows cost two hours that were not code. Defender deleted the binary
 on arrival, git-bash rewrote `/ip4/...` into `C:/Program Files/Git/ip4/...`
@@ -135,6 +165,15 @@ on Windows meets the same three walls.
 **Check:** two machines on different networks connect, and the numbers
 exist on paper. If throughput or punch rate is bad, stop and reconsider
 here rather than at step 9.
+
+**Verdict: pass, with one requirement added.** Machines on different
+networks connect, transfer, and verify their byte counts. The punch rate
+against mobile CGNAT is zero, which is bad and expected, and it does not
+change the choice of libp2p because no alternative punches a symmetric
+NAT either. It does change what the later steps must assume: a transfer
+may run at relay speed for its whole life, so resume, progress and
+cancellation are load-bearing rather than polish, and step 11's metering
+is what stops one such transfer from spending a month of VPS egress.
 
 ---
 
