@@ -1,8 +1,0 @@
-one socket, local port 54962
-
-  stun.l.google.com:19302           seen as 180.252.216.153:54962
-  stun1.l.google.com:19302          seen as 180.252.216.153:54962
-  stun.cloudflare.com:3478          seen as 180.252.216.153:54962
-
-Endpoint-Independent Mapping: one external port (180.252.216.153:54962) for every destination.
-Hole punching can work: the port a third party observes is the port the far peer may use.
