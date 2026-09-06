@@ -33,8 +33,11 @@ def reflect(port):
     b.bind(("", port + 1))
     print("reflecting on %d and %d" % (port, port + 1), flush=True)
     while True:
-        data, addr = a.recvfrom(2048)
-        print("probe from %s:%d" % addr, flush=True)
+        data, addr = a.recvfrom(4096)
+        # The size is logged because a path that passes a small datagram
+        # and drops a large one is invisible to a count of packets, and
+        # is exactly what a low MTU looks like from the far end.
+        print("probe from %s:%d %d bytes" % (addr[0], addr[1], len(data)), flush=True)
         a.sendto(b"SAME-PORT", addr)          # the port they wrote to
         b.sendto(b"OTHER-PORT", addr)         # a second port, same host
         # The late reply goes on a timer rather than a sleep. A prober

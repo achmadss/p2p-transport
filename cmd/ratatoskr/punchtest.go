@@ -60,6 +60,27 @@ func punchtest() error {
 		}
 	}
 
+	// A witness on a public host, written to on this very socket while
+	// the punch is running. Every earlier explanation for a failed punch
+	// — the mapping expired, the carrier renumbered the port, the socket
+	// went quiet — predicts that this socket stops appearing at the
+	// witness, or appears under a different port. If instead the witness
+	// logs the published port throughout, then at the moment the punch
+	// failed both sockets were alive and correctly mapped, and the
+	// packets were simply not crossing between the two networks. That is
+	// proof rather than inference, and it costs one packet a second.
+	if w := os.Getenv("RATATOSKR_PUNCH_WITNESS"); w != "" {
+		if addr, err := net.ResolveUDPAddr("udp4", w); err == nil {
+			fmt.Printf("witnessing to %s once a second.\n", addr)
+			go func() {
+				for time.Now().Before(stop) {
+					c.WriteToUDP([]byte("witness"), addr)
+					time.Sleep(time.Second)
+				}
+			}()
+		}
+	}
+
 	go func() {
 		for time.Now().Before(stop) {
 			for _, p := range sizes {
