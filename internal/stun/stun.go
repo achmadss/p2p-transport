@@ -130,18 +130,22 @@ func parseMapped(b []byte) string {
 	return ""
 }
 
-// Reflect asks every server from one socket and returns the answers
-// alongside the local port they were sent from.
-func Reflect() ([]Reflection, int) {
+// Reflect asks every server from one socket and hands the socket back
+// still open.
+//
+// The caller closes it. It has to stay open because the reflectors are
+// not the only observer worth asking, and an answer from a second socket
+// belongs to that socket: a carrier that gives a new external port per
+// destination is invisible unless every question is asked down the same
+// one. That carrier is exactly what this command exists to catch.
+func Reflect() ([]Reflection, *net.UDPConn) {
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
-		return nil, 0
+		return nil, nil
 	}
-	defer c.Close()
-
 	var got []Reflection
 	for _, s := range Servers() {
 		got = append(got, Ask(c, s))
 	}
-	return got, c.LocalAddr().(*net.UDPAddr).Port
+	return got, c
 }

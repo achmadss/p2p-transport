@@ -355,6 +355,35 @@ punchpair.sh <room> <seconds>` walks it down without an operator on each
 end. Then the fix goes where DCUtR can use it, because libp2p already
 sends sixty-four bytes of junk and five seconds of it is not enough.
 
+That walk-down has not started, because the carrier moved underneath it.
+The phone hotspot that punched seventy-four packets sat behind
+`182.6.165.5`; it now sits behind `182.6.166.95`, and that box does not
+behave the same way. On one socket, in one second, the rendezvous saw
+`182.6.166.95:9238` and a reflector saw `182.6.166.95:9239` — the next
+port, for the next destination. Address-dependent mapping, RFC 4787
+REQ-1 violated, and the end of hole punching on that network: whatever
+port a third party publishes belongs to that third party, and the peer
+is always a fourth. Both sides sent seventy-five packets and neither
+received one, which is the only outcome available when the far side is
+told a port the socket is not behind, and the near side's own NAT then
+drops the reply arriving from the port it really used.
+
+Three tools said this network was fine before the punch did not. Each
+was wrong in a way worth keeping: `natcheck` asked three reflectors, and
+three large providers reached the same way out of a carrier agree with
+each other whatever the carrier does to a fourth destination — it now
+asks the rendezvous on the same socket, which is the observer whose
+answer the punch actually publishes. `punch.py observers` printed "all
+observers agree" while one of them had not answered at all. And the bare
+punch reported "0 packets arrived" without saying whether any had left,
+so a socket refusing to write and a path swallowing everything read
+identically.
+
+None of this touches the QUIC-first finding above. That was measured on
+a carrier that punched, and it stands. What it needs is that carrier
+back — a network where the bare punch crosses — before the seconds can
+be walked down.
+
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
 

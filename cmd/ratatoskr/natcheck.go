@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/achmadss/p2p-transport/internal/stun"
 )
 
@@ -25,11 +28,26 @@ import (
 // the last two answers cannot be told apart.
 
 func natcheck() error {
-	got, local := stun.Reflect()
-	if local == 0 {
+	got, c := stun.Reflect()
+	if c == nil {
 		return fmt.Errorf("cannot open a UDP socket")
 	}
+	defer c.Close()
+	local := c.LocalAddr().(*net.UDPAddr).Port
 	fmt.Printf("one socket, local port %d\n\n", local)
+
+	// One observer that is not a reflector, on the same socket.
+	//
+	// Three public reflectors agreeing is what this command used to
+	// call endpoint-independent mapping, and it was wrong on a carrier
+	// that gave the very next port to a fourth destination: the reply
+	// said hole punching can work, the punch published one port, the
+	// socket was behind another, and nothing arrived. The reflectors
+	// agreed with each other because they are alike — large providers
+	// reached the same way out of the carrier. A disagreement only
+	// appears when an observer that is not one of them is asked too,
+	// and the rendezvous is one this project already runs.
+	got = append(got, askRendezvous(c))
 
 	for _, r := range got {
 		if r.Err != nil {
@@ -47,6 +65,46 @@ func natcheck() error {
 	// asked for that one instead. What this command settles is whether
 	// any single address exists to be found at all.
 	return nil
+}
+
+// askRendezvous asks the pairing server what it sees, shaped as a
+// reflection so it is weighed with the rest. It speaks its own two-word
+// reply rather than STUN, which is why it cannot go in that package.
+func askRendezvous(c *net.UDPConn) stun.Reflection {
+	at := config.Str("RATATOSKR_PUNCH_RENDEZVOUS", "103.181.143.222:9600")
+	r := stun.Reflection{Server: "rendezvous " + at}
+
+	addr, err := net.ResolveUDPAddr("udp4", at)
+	if err != nil {
+		r.Err = err
+		return r
+	}
+	r.IP = addr.IP
+
+	defer c.SetReadDeadline(time.Time{})
+	if _, err := c.WriteToUDP([]byte("natcheck observe"), addr); err != nil {
+		r.Err = err
+		return r
+	}
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 256)
+	for {
+		n, from, err := c.ReadFromUDP(buf)
+		if err != nil {
+			r.Err = err
+			return r
+		}
+		if !from.IP.Equal(addr.IP) {
+			continue
+		}
+		f := strings.Fields(string(buf[:n]))
+		if len(f) == 0 {
+			r.Err = fmt.Errorf("empty reply")
+			return r
+		}
+		r.Mapped = f[0]
+		return r
+	}
 }
 
 // verdict classifies the mapping, and says plainly when the evidence is

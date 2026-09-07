@@ -91,11 +91,19 @@ def observers():
             print("    %-34s %s" % (who, addr or "no answer"))
 
         answers = {a for a in seen.values() if a}
+        # An observer that did not answer is not an observer that agreed.
+        # Folding it into the majority is how a table showing "no answer"
+        # still printed "all observers agree", which is the reading that
+        # sent this investigation the wrong way for an evening.
+        quiet = [w for w, a in seen.items() if not a]
+        if quiet:
+            print("\n  NO ANSWER from %s: this pass proves less than it looks."
+                  % ", ".join(quiet))
         if len(answers) > 1:
             print("\n  DISAGREEMENT: %s" % ", ".join(sorted(answers)))
             print("  this socket has no single address to publish, so a peer told")
             print("  one of these is aiming somewhere this socket is not.")
-        else:
+        elif not quiet:
             print("    all observers agree.")
         if pass_no == 1:
             time.sleep(5)
