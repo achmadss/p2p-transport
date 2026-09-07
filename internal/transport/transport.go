@@ -13,7 +13,10 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
+
+	"github.com/achmadss/p2p-transport/internal/config"
 	"sync/atomic"
 	"time"
 
@@ -133,7 +136,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		}
 		out := make([]multiaddr.Multiaddr, len(as), len(as)+1)
 		copy(out, as)
-		return append(out, a)
+		return append(out, spreadPorts(a, config.Int("RATATOSKR_ADDR_SPREAD", 0))...)
 	}))
 
 	if len(infos) > 0 {
@@ -283,6 +286,47 @@ func hasGlobalIPv6() bool {
 // cgnat is carrier-grade NAT space: the ISP's own network, reachable
 // from inside it and from nowhere else.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// spreadPorts offers the observed address and the next few ports above
+// it.
+//
+// TODO.md step 3 measured a carrier whose external port advances every
+// few seconds and then holds. The relay observes one port, the peer
+// dials it moments later, and the socket is already one port along; a
+// bare punch aimed at a span of ports crossed on the first attempt
+// where a punch aimed at the single observed port never did. libp2p
+// needs no new mechanism for that — it already dials every address a
+// peer advertises, and DCUtR punches at all of them — so the span is
+// expressed as extra addresses rather than as a protocol change.
+//
+// Off by default. It is a workaround for one carrier's behaviour, it
+// costs a candidate address each, and a network that does not need it
+// should not pay for it.
+func spreadPorts(a multiaddr.Multiaddr, n int) []multiaddr.Multiaddr {
+	out := []multiaddr.Multiaddr{a}
+	if n <= 0 {
+		return out
+	}
+	// Only QUIC is punched, and only a UDP port creeps. A TCP address
+	// spread across ports would advertise addresses nothing listens on.
+	port, err := a.ValueForProtocol(multiaddr.P_UDP)
+	if err != nil {
+		return out
+	}
+	base, err := strconv.Atoi(port)
+	if err != nil {
+		return out
+	}
+	for off := 1; off <= n; off++ {
+		next := strings.Replace(a.String(), "/udp/"+port, "/udp/"+strconv.Itoa(base+off), 1)
+		m, err := multiaddr.NewMultiaddr(next)
+		if err != nil {
+			return out // a shape this does not understand: offer the real one alone
+		}
+		out = append(out, m)
+	}
+	return out
+}
 
 // usableObserved accepts an observed address only if advertising it
 // would be a promise this machine can keep.
