@@ -497,6 +497,32 @@ one reflector round trip per punch, and on any network whose published
 address is merely old rather than per-destination it is the address
 that works. It simply cannot rescue this one.
 
+**And the doors are not ordered, which closes it.** The last idea worth
+testing was that the ports are handed out in sequence, so the peer's is
+simply a few past the one a reflector names — the reading that made an
+earlier bare punch cross where a spread anchored to the relay's stale
+view never did. A punch offering the measured port and the sixty-four
+above it, sixty-six addresses from `36011` to `62066`, did not land
+either. Four had already missed. So they are not sequential inside any
+span worth advertising, and a span is not a fix: it would cost every
+peer sixty-five dials that cannot arrive.
+
+`nextDoors` is therefore zero, measured rather than chosen. What
+remains is one freshly measured address instead of one stale one, which
+is right wherever the published address is merely old and does not help
+here.
+
+What is left for this network is not code. Two peers with real IPv6
+have no mail room between them at all, and the hotspot already has a
+`2404:c0::/32` address while the home line has none — that is an ISP
+question, not a libp2p one. Failing that, the birthday approach —
+hundreds of sockets on each side so that some pair collides — is the
+only remaining trick, and it is a coin flip costing thousands of
+packets that libp2p cannot be asked to perform: DCUtR punches with one
+socket, and a connection punched outside it cannot be handed back. The
+relay is what a symmetric carrier leaves, and it is what heimdall is
+for.
+
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
 connects: QUIC handshakes as the first thing the socket ever sends to

@@ -287,25 +287,18 @@ func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiadd
 
 // nextDoors is how many ports above the measured one to offer.
 //
-// This carrier hands a new port to each new destination and appears to
-// hand them out in order: the reflector we ask is one destination and
-// the peer is the next, so the peer's port is the measured one plus a
-// small step rather than the measured one itself. A bare punch spread
-// over a span crossed on the first attempt when the span was anchored
-// to a fresh measurement, and never crossed when it was anchored to the
-// relay's view from startup — which is thousands of ports away and was
-// the mistake that made an earlier spread look like a dead end.
+// Zero, measured rather than chosen. This carrier gives each new
+// destination a different port, and the question was only whether it
+// gives them in order: a punch offering the measured port and the
+// sixty-four above it — sixty-six addresses, 36011 through 62066 —
+// never landed. They are not ordered within any span worth advertising,
+// so a span is not a fix and pretending otherwise costs every peer
+// sixty-five dials that cannot arrive.
 //
-// Sixty-four while this is being measured. Four was the guess that the
-// peer is the very next destination to ask, and it missed: the socket
-// talks to a relay, a reflector and whatever else the machine is doing,
-// so the doors between the measurement and the punch are not ours to
-// count. Sixty-four says whether they are handed out in order at all.
-// If a punch lands here the number comes back down to whatever the
-// measured offset turns out to be; if it does not, no sane span will
-// and the relay is the answer.
-// ponytail: a diagnostic width, not a shipping one.
-const nextDoors = 64
+// The constant stays because the measurement above it is worth keeping
+// and this is where its width is stated. On a network whose published
+// address is merely old, zero is correct and one address is enough.
+const nextDoors = 0
 
 func has(as []multiaddr.Multiaddr, a multiaddr.Multiaddr) bool {
 	for _, have := range as {
