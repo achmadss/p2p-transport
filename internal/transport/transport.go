@@ -275,7 +275,7 @@ func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiadd
 	if mapped == "" {
 		return as
 	}
-	fresh, ok := usableObserved(mapped)
+	fresh, ok := quicAddr(mapped)
 	if !ok {
 		return as
 	}
@@ -333,6 +333,33 @@ var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 // handshake needs a forwarded port rather than a punched one, so a TCP
 // address here would be inventing a route. Public only, because an
 // address a third party cannot dial is worse than no address at all.
+// quicAddr turns a reflector's "ip:port" into the QUIC multiaddr a peer
+// can dial, and holds it to the same standard as an address a relay
+// reported.
+//
+// The two observers speak different languages and the difference is easy
+// to miss: ObservedProto answers with a multiaddr because it is libp2p
+// talking to libp2p, and STUN answers with a host and port because it
+// predates all of this. Handing the second to a parser expecting the
+// first fails silently and every measurement is discarded — which is
+// exactly what happened, with the measured address printed in the log
+// immediately above the punch that ignored it.
+func quicAddr(hostPort string) (multiaddr.Multiaddr, bool) {
+	ip, port, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return nil, false
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return nil, false
+	}
+	family := "ip4"
+	if !addr.Unmap().Is4() {
+		family = "ip6"
+	}
+	return usableObserved(fmt.Sprintf("/%s/%s/udp/%s/quic-v1", family, addr.Unmap(), port))
+}
+
 func usableObserved(s string) (multiaddr.Multiaddr, bool) {
 	ma, err := multiaddr.NewMultiaddr(strings.TrimSpace(s))
 	if err != nil || transportOf(ma) != "quic" || pathOf(ma) != PathDirect {
