@@ -65,7 +65,8 @@ def main(port):
         mine = f"{addr[0]}:{addr[1]}"
         theirs = f"{peer[0]}:{peer[1]}" if peer else "-"
         s.sendto(f"{mine} {theirs}".encode(), addr)
-        print(f"{room}: {mine} ({who}) <- peer {theirs}", flush=True)
+        stamp = time.strftime("%H:%M:%S", time.localtime())
+        print(f"{stamp} {room}: {mine} ({who}) <- peer {theirs}", flush=True)
 
 
 def selftest():
