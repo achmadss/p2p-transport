@@ -18,8 +18,14 @@ out=${LOG:-safedial.log}
 cp dist/ratatoskr /tmp/rata-safe || exit 1
 chmod +x /tmp/rata-safe
 
+# setsid is Linux and git-bash; macOS does not ship it. nohup alone is
+# enough on every one of them: it detaches the run from this shell's
+# hangup, which is the whole requirement.
+detach=nohup
+command -v setsid >/dev/null && detach="setsid nohup"
+
 echo "dialling $id with spread $spread; output in $out"
 RATATOSKR=/tmp/rata-safe RATATOSKR_ADDR_SPREAD=$spread \
-	setsid nohup ./scripts/nattest.sh dial "$id" </dev/null >"$out" 2>&1 &
+	$detach ./scripts/nattest.sh dial "$id" </dev/null >"$out" 2>&1 &
 
 echo "started as pid $!. watch it with:  tail -f $out"
