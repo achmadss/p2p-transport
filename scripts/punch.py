@@ -2,6 +2,7 @@
 """One UDP socket: STUN names it, then it punches at a peer.
 
 usage: scripts/punch.py <packets> <ip:port> [bytes]
+       scripts/punch.py observers
 
 Sends one packet per second, <packets> times, and prints whatever comes
 back from that peer. The socket that asked STUN is the socket that sends
@@ -42,7 +43,69 @@ def ask(sock, server, timeout=2.0):
     return None
 
 
+RENDEZVOUS = ("103.181.143.222", 9600)
+
+
+def observers():
+    """Ask every observer on one socket and print what each one saw.
+
+    A NAT is classified by asking several third parties and comparing
+    their answers, and this project's classifier calls that endpoint-
+    independent when they agree. They can agree and still be wrong: three
+    large providers reached over one route out of a carrier say nothing
+    about a fourth destination on another route, and the punch aims at an
+    address published by exactly that fourth one. Where the classifier
+    and the rendezvous disagree, the punch is aiming at a door this
+    socket is not behind, and no window is long enough to fix that.
+
+    Twice, seconds apart, because a mapping that rotates on a timer and a
+    mapping that differs per destination produce the same single reading.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("", 0))
+    print("one socket, local port %d\n" % sock.getsockname()[1])
+
+    for pass_no in (1, 2):
+        seen = {}
+        for name, p in SERVERS:
+            try:
+                srv = (socket.gethostbyname(name), p)
+            except socket.gaierror:
+                continue
+            seen["%s:%d" % (name, p)] = ask(sock, srv)
+
+        sock.sendto(b"observe probe-%d" % pass_no, RENDEZVOUS)
+        end = time.time() + 4
+        answer = None
+        while time.time() < end:
+            if not select.select([sock], [], [], end - time.time())[0]:
+                break
+            data, frm = sock.recvfrom(512)
+            if frm[0] == RENDEZVOUS[0]:
+                answer = data.decode("utf-8", "replace").split()[0]
+                break
+        seen["rendezvous %s:%d" % RENDEZVOUS] = answer
+
+        print("  pass %d" % pass_no)
+        for who, addr in seen.items():
+            print("    %-34s %s" % (who, addr or "no answer"))
+
+        answers = {a for a in seen.values() if a}
+        if len(answers) > 1:
+            print("\n  DISAGREEMENT: %s" % ", ".join(sorted(answers)))
+            print("  this socket has no single address to publish, so a peer told")
+            print("  one of these is aiming somewhere this socket is not.")
+        else:
+            print("    all observers agree.")
+        if pass_no == 1:
+            time.sleep(5)
+        print()
+    return 0
+
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "observers":
+        return observers()
     if len(sys.argv) < 3:
         print(__doc__.strip())
         return 2
