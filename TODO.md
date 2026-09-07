@@ -432,6 +432,35 @@ The `+1` held again here: the relay observed 63189 in one run and
 35629 in the next, and the ports advertised around it are what carried
 the connection.
 
+**And the offset grows with uptime, which kills the workaround.** The
+same pair, the same spread of three, dialled against an agent that had
+been serving for three minutes rather than seconds: still relayed
+after a minute, every attempt timing out on all three of
+`35653/35654/35655`. So the `+1` was not a property of the carrier. It
+was the age of the relay connection at the moment it was measured.
+
+The mechanism follows from what was already recorded. This NAT keeps
+an existing mapping on its original port and hands new destinations
+the current value of a counter that walks forward over time. The
+agent's door to the relay is opened once at startup and never moves;
+the counter does. So the gap between what the relay observes and what
+a fresh peer will reach is the drift accumulated since the agent
+started, and it has no upper bound. A span of three covers a
+seconds-old agent and nothing else, which is the worst shape a fix can
+have: it passes the test and fails the use.
+
+That settles the design rather than leaving it open.
+`RATATOSKR_ADDR_SPREAD` cannot become a measured constant, because
+there is no constant to measure. The address to publish has to be
+taken on libp2p's own socket, toward a destination it has not spoken
+to, at the moment of the punch — not read off a connection opened at
+startup. `internal/transport/wiretap.go` already holds the only hook
+that reaches that socket (`quicreuse.OverrideListenUDP`), which is why
+it survived the clear-out. What remains is to send a reflector query
+through it, intercept the reply before quic-go sees it, and hand the
+answer to the DCUtR address filter that `EnableHolePunching` already
+takes.
+
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
 connects: QUIC handshakes as the first thing the socket ever sends to
