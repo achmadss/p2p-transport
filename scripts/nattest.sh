@@ -37,10 +37,6 @@ export RATATOSKR_PUNCH_WINDOW=${RATATOSKR_PUNCH_WINDOW:-60s}
 # these four subsystems say what was offered, what was dialled, and how
 # it failed, which is the difference between a closed network and a
 # wrong configuration. Everything else stays at error.
-# The socket's own account of the punch, from inside the process. Set it
-# to the other machine's public ip; without it the tap is not installed.
-export RATATOSKR_DIAG_WIRE=${RATATOSKR_DIAG_WIRE:-}
-
 export GOLOG_LOG_LEVEL=${GOLOG_LOG_LEVEL:-error,p2p-holepunch=debug,autorelay=debug,autonat=debug,net/identify=debug}
 
 BIN=${RATATOSKR:-}

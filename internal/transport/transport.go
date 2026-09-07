@@ -13,10 +13,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strconv"
 	"strings"
 
-	"github.com/achmadss/p2p-transport/internal/config"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +98,11 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		return nil, err
 	}
 
+	// The socket has to be wrapped before libp2p opens it and asked
+	// long after, so the handle is made first and filled in by the
+	// option itself.
+	mine, socketOpt := ownSocket()
+
 	opts := []libp2p.Option{
 		libp2p.Identity(key),
 		libp2p.ListenAddrStrings(listenAddrs...),
@@ -110,7 +113,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// connection into a direct one when both ends can be punched
 		// through. Both are why the relay is a fallback and not a bill.
 		libp2p.EnableNATService(),
-		libp2p.EnableHolePunching(holepunch.WithAddrFilter(punchFilter{hasIPv6: hasGlobalIPv6})),
+		libp2p.EnableHolePunching(holepunch.WithAddrFilter(punchFilter{hasIPv6: hasGlobalIPv6, now: mine})),
 		// Ask the home router to forward a port, the way a torrent
 		// client does. This is what makes a relay a genuine last
 		// resort rather than the only route: a machine with a
@@ -136,7 +139,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		}
 		out := make([]multiaddr.Multiaddr, len(as), len(as)+1)
 		copy(out, as)
-		return append(out, spreadPorts(a, config.Int("RATATOSKR_ADDR_SPREAD", 0))...)
+		return append(out, a)
 	}))
 
 	if len(infos) > 0 {
@@ -156,7 +159,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		opts = append(opts, libp2p.ForceReachabilityPrivate())
 	}
 
-	opts = append(opts, wireTap()...)
+	opts = append(opts, socketOpt)
 
 	h, err := libp2p.New(opts...)
 	if err != nil {
@@ -239,13 +242,49 @@ func HandleObserved(h host.Host) {
 //
 // Nothing is filtered when this machine does have IPv6: two peers that
 // both have it should meet over it and skip the NAT entirely.
-type punchFilter struct{ hasIPv6 func() bool }
+type punchFilter struct {
+	hasIPv6 func() bool
+	now     *socketRef // nil until a socket exists, and in tests
+}
 
-// FilterLocal leaves what we offer alone. An address we published is one
-// a peer was told to dial, and withdrawing it here would only make the
-// two lists disagree.
-func (punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-	return as
+// FilterLocal names this socket now, rather than repeating what a relay
+// saw when the agent started.
+//
+// This is the last point before DCUtR tells the peer where to punch, and
+// on a carrier whose port creeps it is the only point where the answer
+// is still true. The addresses arriving here come from host.Addrs(),
+// which carries the relay's observation from startup; the relay's own
+// mapping never moves, so that observation ages while the port a fresh
+// peer would reach walks away from it. Measured here it cannot age: the
+// peer dials within a second or two of being told.
+//
+// A measured address is added rather than substituted. It is one
+// reflector's word about a socket, the published list may already be
+// right, and libp2p punches at every candidate it is given — so being
+// wrong here costs one extra dial and being right saves the punch.
+// Everything is left alone when no reflector answers, which is the
+// behaviour this had before.
+func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	if f.now == nil {
+		return as
+	}
+	// Two seconds is the whole budget: DCUtR is on a clock, and a
+	// reflector that has not answered by then would arrive too late to
+	// be true anyway.
+	mapped := f.now.Where(2 * time.Second)
+	if mapped == "" {
+		return as
+	}
+	fresh, ok := usableObserved(mapped)
+	if !ok {
+		return as
+	}
+	for _, a := range as {
+		if a.Equal(fresh) {
+			return as
+		}
+	}
+	return append(append(as[:0:0], as...), fresh)
 }
 
 func (f punchFilter) FilterRemote(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
@@ -286,54 +325,6 @@ func hasGlobalIPv6() bool {
 // cgnat is carrier-grade NAT space: the ISP's own network, reachable
 // from inside it and from nowhere else.
 var cgnat = netip.MustParsePrefix("100.64.0.0/10")
-
-// spreadPorts offers the observed address and the next few ports above
-// it.
-//
-// TODO.md step 3 measured a carrier whose external port advances every
-// few seconds and then holds. The relay observes one port, the peer
-// dials it moments later, and the socket is already one port along; a
-// bare punch aimed at a span of ports crossed on the first attempt
-// where a punch aimed at the single observed port never did. libp2p
-// needs no new mechanism for that — it already dials every address a
-// peer advertises, and DCUtR punches at all of them — so the span is
-// expressed as extra addresses rather than as a protocol change.
-//
-// Off by default. It is a workaround for one carrier's behaviour, it
-// costs a candidate address each, and a network that does not need it
-// should not pay for it.
-func spreadPorts(a multiaddr.Multiaddr, n int) []multiaddr.Multiaddr {
-	out := []multiaddr.Multiaddr{a}
-	if n <= 0 {
-		return out
-	}
-	// A circuit address names the relay's port, not this machine's, and
-	// the relay is listening on exactly one. Spreading it would publish
-	// eight addresses at a host that refuses them and hand every dialler
-	// eight timeouts to work through first.
-	if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
-		return out
-	}
-	// Only QUIC is punched, and only a UDP port creeps. A TCP address
-	// spread across ports would advertise addresses nothing listens on.
-	port, err := a.ValueForProtocol(multiaddr.P_UDP)
-	if err != nil {
-		return out
-	}
-	base, err := strconv.Atoi(port)
-	if err != nil {
-		return out
-	}
-	for off := 1; off <= n; off++ {
-		next := strings.Replace(a.String(), "/udp/"+port, "/udp/"+strconv.Itoa(base+off), 1)
-		m, err := multiaddr.NewMultiaddr(next)
-		if err != nil {
-			return out // a shape this does not understand: offer the real one alone
-		}
-		out = append(out, m)
-	}
-	return out
-}
 
 // usableObserved accepts an observed address only if advertising it
 // would be a promise this machine can keep.

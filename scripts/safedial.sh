@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the dial where a crash cannot take the terminal with it.
 #
-#   scripts/safedial.sh <peer id> [spread]
+#   scripts/safedial.sh <peer id>
 #
 # Twice now the dial has taken every terminal window on the machine down
 # with it and left no binary behind, which destroys the evidence and the
@@ -12,7 +12,6 @@ set -u
 [ $# -ge 1 ] || { sed -n '2,12p' "$0"; exit 2; }
 
 id=$1
-spread=${2:-2}
 out=${LOG:-safedial.log}
 
 cp dist/ratatoskr /tmp/rata-safe || exit 1
@@ -24,8 +23,8 @@ chmod +x /tmp/rata-safe
 detach=nohup
 command -v setsid >/dev/null && detach="setsid nohup"
 
-echo "dialling $id with spread $spread; output in $out"
-RATATOSKR=/tmp/rata-safe RATATOSKR_ADDR_SPREAD=$spread \
+echo "dialling $id; output in $out"
+RATATOSKR=/tmp/rata-safe RATATOSKR_DIAG=1 \
 	$detach ./scripts/nattest.sh dial "$id" </dev/null >"$out" 2>&1 &
 
 echo "started as pid $!. watch it with:  tail -f $out"

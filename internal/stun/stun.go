@@ -58,11 +58,8 @@ func Ask(c *net.UDPConn, server string) Reflection {
 	}
 	r.IP = addr.IP
 
-	req := make([]byte, 20)
-	binary.BigEndian.PutUint16(req[0:], 0x0001) // binding request
-	binary.BigEndian.PutUint16(req[2:], 0)      // no attributes
-	binary.BigEndian.PutUint32(req[4:], 0x2112A442)
-	if _, err := rand.Read(req[8:20]); err != nil {
+	req, txid, err := Request()
+	if err != nil {
 		r.Err = err
 		return r
 	}
@@ -83,19 +80,46 @@ func Ask(c *net.UDPConn, server string) Reflection {
 			r.Err = err
 			return r
 		}
-		if n < 20 || !from.IP.Equal(addr.IP) {
+		if !from.IP.Equal(addr.IP) {
 			continue
 		}
-		if string(buf[8:20]) != string(req[8:20]) {
-			continue
-		}
-		if m := parseMapped(buf[:n]); m != "" {
+		if m := ParseResponse(buf[:n], txid); m != "" {
 			r.Mapped = m
 			return r
 		}
 	}
 	r.Err = fmt.Errorf("no usable reply")
 	return r
+}
+
+// Request builds one binding request and returns it with its
+// transaction id.
+//
+// It is exported because the socket libp2p punches from is not a
+// *net.UDPConn this package can be handed: it belongs to quic-go, and
+// the only way to ask a reflector about it is to write the request into
+// that socket and recognise the answer coming back out. Building the
+// bytes here is what keeps one implementation of STUN in this repo.
+func Request() (req, txid []byte, err error) {
+	req = make([]byte, 20)
+	binary.BigEndian.PutUint16(req[0:], 0x0001) // binding request
+	binary.BigEndian.PutUint16(req[2:], 0)      // no attributes
+	binary.BigEndian.PutUint32(req[4:], 0x2112A442)
+	if _, err := rand.Read(req[8:20]); err != nil {
+		return nil, nil, err
+	}
+	return req, req[8:20], nil
+}
+
+// ParseResponse returns the mapped address a reply carries, or "" if the
+// bytes are not a reply to this transaction. A caller sharing a socket
+// with other traffic uses the empty answer to mean "not mine, pass it
+// on" — which is the whole reason both halves are separable.
+func ParseResponse(b, txid []byte) string {
+	if len(b) < 20 || string(b[8:20]) != string(txid) {
+		return ""
+	}
+	return parseMapped(b)
 }
 
 // parseMapped reads XOR-MAPPED-ADDRESS, falling back to the older
