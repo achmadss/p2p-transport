@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
@@ -205,6 +206,17 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 	stop := time.Now().Add(window)
 	fmt.Printf("\npunching bare packets at %s for %s.\n", peer, window)
 
+	// Count what left, and say why it did not.
+	//
+	// This dropped the error from every send, so a run where the socket
+	// refused to write at all reported "0 packets arrived" — identical
+	// to a run where the packets left and the path swallowed them. Those
+	// are opposite findings and the second cost several evenings. Now
+	// both sides of the sentence are measured: how many went out, and
+	// how many came back.
+	var mu sync.Mutex
+	var sent int
+	var sendErr error
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -215,7 +227,16 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 				return
 			default:
 			}
-			c.WriteToUDP(p, peer)
+			_, err := c.WriteToUDP(p, peer)
+			mu.Lock()
+			if err != nil {
+				if sendErr == nil {
+					sendErr = err
+				}
+			} else {
+				sent++
+			}
+			mu.Unlock()
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
@@ -233,6 +254,14 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 		}
 	}
 	c.SetReadDeadline(time.Time{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	fmt.Printf("  sent %d packets", sent)
+	if sendErr != nil {
+		fmt.Printf(", and the socket refused the rest: %v", sendErr)
+	}
+	fmt.Println()
 	return got
 }
 
