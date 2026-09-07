@@ -217,6 +217,26 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 	var mu sync.Mutex
 	var sent int
 	var sendErr error
+	// Aim at a range of ports, not one.
+	//
+	// This carrier gives the next port to the next destination: the
+	// rendezvous saw 9308 and a reflector saw 9309 on one socket, twice
+	// over. So the port it uses toward the peer is a third value nobody
+	// observed, and the single published port is guaranteed wrong. It is
+	// also, on this evidence, only a step or two away — and the peer's
+	// NAT lets in whatever it has sent to, so writing to a span of ports
+	// opens a filter entry for each and the peer's real one is among
+	// them. Where the packets come back from names it.
+	//
+	// Off by default: on a NAT that keeps one port this is a dozen
+	// pointless packets, and the number that matters is measured before
+	// it is worked around.
+	spread := config.Int("RATATOSKR_PUNCH_SPREAD", 0)
+	if spread > 0 {
+		fmt.Printf("  spreading over ports %d-%d, because one of them is the real one.\n",
+			peer.Port, peer.Port+spread)
+	}
+
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -227,21 +247,26 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 				return
 			default:
 			}
-			_, err := c.WriteToUDP(p, peer)
-			mu.Lock()
-			if err != nil {
-				if sendErr == nil {
-					sendErr = err
+			for off := 0; off <= spread; off++ {
+				to := *peer
+				to.Port = peer.Port + off
+				_, err := c.WriteToUDP(p, &to)
+				mu.Lock()
+				if err != nil {
+					if sendErr == nil {
+						sendErr = err
+					}
+				} else {
+					sent++
 				}
-			} else {
-				sent++
+				mu.Unlock()
 			}
-			mu.Unlock()
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
 
 	var got int
+	reported := map[int]bool{}
 	buf := make([]byte, 2000)
 	for time.Now().Before(stop) {
 		c.SetReadDeadline(stop)
@@ -251,6 +276,11 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 		}
 		if n > 0 && from.IP.Equal(peer.IP) {
 			got++
+			if from.Port != peer.Port && !reported[from.Port] {
+				reported[from.Port] = true
+				fmt.Printf("  ARRIVED FROM PORT %d, not the published %d: the offset is %+d.\n",
+					from.Port, peer.Port, from.Port-peer.Port)
+			}
 		}
 	}
 	c.SetReadDeadline(time.Time{})
