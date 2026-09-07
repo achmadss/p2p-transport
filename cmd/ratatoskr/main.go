@@ -76,8 +76,6 @@ func main() {
 			break
 		}
 		err = punchQUIC(args[0])
-	case "punchtest":
-		err = punchtest()
 	case "run":
 		err = run()
 	case "discover":
@@ -117,14 +115,12 @@ func usage() {
                        measure throughput to a machine, default 100 MB
   natcheck             classify this network's NAT, which decides
                        whether a direct connection is possible at all
-  punchtest            punch a hole by hand, without libp2p, to tell a
-                       closed network apart from a wrong configuration
   punch-quic listen|dial
-                       the same punch, then a real QUIC handshake over
-                       it. punchtest proves a packet crosses; this
-                       proves a handshake does, which is what the agent
-                       needs. Run listen on one machine, dial on the
-                       other.
+                       punch a hole without libp2p, then handshake QUIC
+                       over it, to tell a closed network apart from a
+                       wrong configuration. Run listen on one machine,
+                       dial on the other; scripts/punchpair.sh pairs
+                       them so neither has to wait for the other.
 
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR      where identity.key and config.json live
