@@ -10,6 +10,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -38,8 +39,27 @@ type LAN struct {
 }
 
 // Start begins advertising and listening. Close stops both.
+//
+// RATATOSKR_NO_MDNS returns a LAN that finds nothing and advertises
+// nothing, for a machine where multicast is not merely useless but
+// harmful. One such machine is on record: a macOS content filter fails
+// every packet this sends to 224.0.0.251 — the kernel logs
+// `sosend_reinject() failed` for lport 5353 — and the agent takes the
+// terminal down with it on startup, while the same machine runs
+// punch-quic, which opens no multicast socket, without trouble. Nothing
+// in the LAN path can defend against a filter below the socket, so the
+// only remedy available here is not to open it.
+//
+// The cost is exactly what it says: no peers found on this network, and
+// this machine invisible to peers on it. Everything reached through a
+// relay or a punched address still works.
 func Start(h host.Host) (*LAN, error) {
 	l := &LAN{h: h, seen: map[peer.ID][]peer.AddrInfo{}, done: make(chan struct{})}
+	if os.Getenv("RATATOSKR_NO_MDNS") != "" {
+		fmt.Fprintln(os.Stderr, "mdns off: this machine will not find or be found on the LAN")
+		close(l.done)
+		return l, nil
+	}
 	if err := l.restart(); err != nil {
 		return nil, err
 	}
@@ -151,9 +171,17 @@ func Matches(id peer.ID, want string) bool {
 }
 
 func (l *LAN) Close() error {
-	l.cancel()
+	// A LAN that never started has no watcher to cancel and no service
+	// to stop, and the shutdown path must not be the thing that crashes
+	// on the machine mDNS was turned off to rescue.
+	if l.cancel != nil {
+		l.cancel()
+	}
 	<-l.done
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.svc == nil {
+		return nil
+	}
 	return l.svc.Close()
 }
