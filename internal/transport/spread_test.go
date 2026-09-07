@@ -31,6 +31,13 @@ func TestSpreadPorts(t *testing.T) {
 		}
 	}
 
+	// A circuit address names the relay's port, and the relay listens on
+	// one. Eight more are eight timeouts for every dialler.
+	circuit := multiaddr.StringCast("/ip4/103.181.143.222/udp/4001/quic-v1/p2p/12D3KooWLD13rmEfjNt8DJd3c86x93LHUGyQLizjvoXZsS3cPk5w/p2p-circuit")
+	if got := spreadPorts(circuit, 2); len(got) != 1 {
+		t.Errorf("circuit must not spread: got %v", got)
+	}
+
 	// A TCP address has no port that creeps, and nothing listens on the
 	// ones above it.
 	tcp := multiaddr.StringCast("/ip4/182.6.166.95/tcp/9314")

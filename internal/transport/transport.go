@@ -307,6 +307,13 @@ func spreadPorts(a multiaddr.Multiaddr, n int) []multiaddr.Multiaddr {
 	if n <= 0 {
 		return out
 	}
+	// A circuit address names the relay's port, not this machine's, and
+	// the relay is listening on exactly one. Spreading it would publish
+	// eight addresses at a host that refuses them and hand every dialler
+	// eight timeouts to work through first.
+	if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err == nil {
+		return out
+	}
 	// Only QUIC is punched, and only a UDP port creeps. A TCP address
 	// spread across ports would advertise addresses nothing listens on.
 	port, err := a.ValueForProtocol(multiaddr.P_UDP)
