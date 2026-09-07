@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
+	"github.com/achmadss/p2p-transport/internal/stun"
 	"github.com/quic-go/quic-go"
 )
 
@@ -70,8 +71,26 @@ func punchQUIC(role string) error {
 	// which is right everywhere else and wrong here: zero is the setting.
 	raw := -1
 	if w := config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second); os.Getenv("RATATOSKR_PUNCH_RAW") != "0" && w > 0 {
+		// What a third party sees, on this socket, at the moment the
+		// punch starts and again when it ends.
+		//
+		// A run where nothing arrives has two shapes that read alike:
+		// the packets went to the right place and the path dropped
+		// them, or the address each side published stopped being its
+		// address before the first packet left. Only the second is a
+		// carrier that renumbers a live mapping, and no amount of
+		// staring at a zero tells them apart. One reflector call at
+		// each end of the window does.
+		before := whereAmI(c)
 		raw = rawPunch(c, peer, w)
+		after := whereAmI(c)
 		fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
+		if before != "" && after != "" && before != after {
+			fmt.Printf("  MY PORT MOVED during the punch: %s -> %s\n", before, after)
+			fmt.Println("  the peer was aiming at an address this socket no longer had.")
+		} else if before != "" {
+			fmt.Printf("  my address held at %s throughout.\n", before)
+		}
 		if raw == 0 {
 			fmt.Println("  the path is shut, so this run says nothing about QUIC.")
 		}
@@ -135,6 +154,22 @@ func punchQUIC(role string) error {
 	fmt.Println("problem, and neither is quic-go: whatever fails in `connect` fails")
 	fmt.Println("above them both.")
 	return nil
+}
+
+// whereAmI names this socket from outside, or returns "" if no
+// reflector answers. It is deliberately the same socket: an address
+// measured on any other one belongs to that one.
+func whereAmI(c *net.UDPConn) string {
+	// Ask leaves the deadline it read under. QUIC takes this socket a
+	// moment later and every read would fail at once, three seconds in
+	// the past, which looks exactly like a dead path.
+	defer c.SetReadDeadline(time.Time{})
+	for _, s := range stun.Servers() {
+		if r := stun.Ask(c, s); r.Err == nil {
+			return r.Mapped
+		}
+	}
+	return ""
 }
 
 // rawPunch sends and counts bare packets for a fixed window, so the QUIC
