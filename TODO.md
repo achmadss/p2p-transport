@@ -384,6 +384,35 @@ a carrier that punched, and it stands. What it needs is that carrier
 back — a network where the bare punch crosses — before the seconds can
 be walked down.
 
+**The offset is +1, and it is aimable.** Three readings, hours apart:
+the rendezvous saw 9238, 9308, 9314 and a reflector saw 9239, 9309,
+9315 on the same socket each time. So the published port is not the
+port the carrier uses toward anyone else, but it is one below it. A
+bare punch spread over nine ports above the published one crossed
+immediately — 77 packets in, 74 out, and QUIC handshaked and carried a
+stream both ways. The packets came back from `9315`, exactly the port
+the reflector had named, and `RATATOSKR_PUNCH_SPREAD` prints that
+offset rather than assuming it.
+
+What advances the port is time, not the destination. `natcheck` asks
+four observers inside a second and all four agree; the punch asks the
+rendezvous, waits for a peer, then asks a reflector three seconds
+later and gets the next port. Once advanced it holds: the whole
+fifteen-second punch and the QUIC connection after it stayed on 9315.
+An address from this carrier is therefore correct when it is measured
+and stale a few seconds later, which is the one property no signalling
+protocol can carry.
+
+That is worth holding against `/ratatoskr/observed/1.0.0`. The agent
+learns its public address by asking a relay and advertises it through
+an `AddrsFactory`, and the peer dials it some seconds later — the
+exact shape that fails here. It would explain what nothing else has:
+why a punch aimed by STUN crossed on the same pair, at the same
+minute, that DCUtR could not open. It is a hypothesis with a mechanism
+behind it now rather than a guess, and the way to test it is to
+measure what port an agent's socket really uses toward a peer versus
+what its relay observed.
+
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
 
