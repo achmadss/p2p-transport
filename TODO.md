@@ -413,6 +413,35 @@ behind it now rather than a guess, and the way to test it is to
 measure what port an agent's socket really uses toward a peer versus
 what its relay observed.
 
+**The QUIC-first finding is withdrawn.** Aimed at the same span of
+ports the bare punch opens, a run with the bare window set to zero
+connects: QUIC handshakes as the first thing the socket ever sends to
+that peer, and a stream carries bytes both ways. So the payload was
+never the difference. The earlier comparison put a bare punch and a
+QUIC-first run in separate processes on separate sockets, each with
+its own address measured at its own moment, and on a carrier whose
+port creeps every few seconds that is two aims, not two payloads. It
+read as a property of QUIC because both halves were wrong about the
+port and only one of them was wrong quietly.
+
+What survives it is better. Three things are now measured rather than
+inferred: this carrier's external port advances with time and holds
+once advanced; the advance is +1 across every reading taken; and a
+punch aimed at a span covering it crosses immediately, with QUIC first
+or last, at one second of warm-up or none. Nothing about the path
+resists a hole punch. What defeats it is exclusively the staleness of
+the address that gets published.
+
+Which leaves one suspect and one measurement. `/ratatoskr/observed/
+1.0.0` asks a relay for this machine's public address and an
+`AddrsFactory` advertises it; a peer dials it some seconds later.
+`internal/transport/wiretap.go` already counts what libp2p's own QUIC
+socket sends and to where, so the test is to run the agent with the
+tap on and compare the port its packets actually leave from with the
+port it advertised. If those differ by one, DCUtR has been dialling a
+port nobody was behind for the whole of this step, and neither libp2p
+nor quic-go was ever at fault.
+
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
 
