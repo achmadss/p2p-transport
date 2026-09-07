@@ -296,10 +296,16 @@ func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiadd
 // relay's view from startup — which is thousands of ports away and was
 // the mistake that made an earlier spread look like a dead end.
 //
-// Four, because that is a handful of extra dials against a punch that
-// otherwise cannot happen, and because a span wide enough to cover a
-// random port would be thousands of addresses and is not a fix.
-const nextDoors = 4
+// Sixty-four while this is being measured. Four was the guess that the
+// peer is the very next destination to ask, and it missed: the socket
+// talks to a relay, a reflector and whatever else the machine is doing,
+// so the doors between the measurement and the punch are not ours to
+// count. Sixty-four says whether they are handed out in order at all.
+// If a punch lands here the number comes back down to whatever the
+// measured offset turns out to be; if it does not, no sane span will
+// and the relay is the answer.
+// ponytail: a diagnostic width, not a shipping one.
+const nextDoors = 64
 
 func has(as []multiaddr.Multiaddr, a multiaddr.Multiaddr) bool {
 	for _, have := range as {
