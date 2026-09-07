@@ -91,8 +91,15 @@ choice. Do it before anything depends on the answer.
       and how long the upgrade took
 - [x] **Measure and write down**: hole punch success rate, time to punch,
       and MB/s on a 1 Gbps LAN and over the Internet
-- [x] Test: home Wi-Fi to phone hotspot — upgraded to direct in 251 ms
-      once the advertised address spans the carrier's port creep
+- [ ] Test: home Wi-Fi to phone hotspot. A punch lands in 251 ms only
+      when the agent is seconds old; minutes later the carrier's port is
+      unrelated to any address a third party can observe, and nothing
+      offered — a measured address, a span of five, a span of
+      sixty-six — has landed since. **This is the common case, not the
+      hard one**: a phone on a public network reaching a laptop at home
+      is what the product is for, so a relay-only answer here is a
+      failed step, not a finished one.
+- [ ] Read Tailscale and take what applies (see below)
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
@@ -456,7 +463,9 @@ taken on libp2p's own socket, toward a destination it has not spoken
 to, at the moment of the punch — not read off a connection opened at
 startup. `internal/transport/wiretap.go` already holds the only hook
 that reaches that socket (`quicreuse.OverrideListenUDP`), which is why
-it survived the clear-out. What remains is to send a reflector query
+it survived the clear-out. (It has since become
+`internal/transport/selfaddr.go`, which does the asking rather than
+the counting.) What remains is to send a reflector query
 through it, intercept the reply before quic-go sees it, and hand the
 answer to the DCUtR address filter that `EnableHolePunching` already
 takes.
@@ -519,9 +528,71 @@ question, not a libp2p one. Failing that, the birthday approach —
 hundreds of sockets on each side so that some pair collides — is the
 only remaining trick, and it is a coin flip costing thousands of
 packets that libp2p cannot be asked to perform: DCUtR punches with one
-socket, and a connection punched outside it cannot be handed back. The
-relay is what a symmetric carrier leaves, and it is what heimdall is
-for.
+socket, and a connection punched outside it cannot be handed back.
+
+**Step 3 stays open, and "use the relay" is not the answer.** A phone
+on a public network reaching a laptop at home is the ordinary way this
+product will be used, not an edge case. `SPEC.md` §24 does allow a
+fallback relay, and §263 says in the same breath that it must not
+become the normal data path; on this carrier it would be exactly that.
+The owner's constraint is stricter still — no egress billed to this
+VPS at all — so the measurements above are the problem statement
+rather than the conclusion.
+
+### What to read next: Tailscale
+
+Tailscale solves this case in production, on the same carriers, and
+its source is open. Clone it beside this repo and read it before
+writing anything:
+
+```
+git clone --depth 1 https://github.com/tailscale/tailscale
+```
+
+Read to answer specific questions, not for inspiration. Each one is
+something measured above that we could not get past.
+
+- **`net/portmapper`** — UPnP, NAT-PMP and PCP, all three, with the
+  quirks of real routers. `libp2p.NATPortMap()` is enabled here and
+  achieved nothing: the router accepted an `AddPortMapping` and could
+  not name its own external address, because the carrier NAT is above
+  it. Does Tailscale detect that case, and does it get anything the
+  hand-written attempt did not?
+- **`net/netcheck`** — their NAT and latency probe. `natcheck` here
+  calls this carrier endpoint-independent because four reflectors
+  asked inside one second agree. Theirs runs longer and asks
+  differently. What does it ask that ours does not, and would it have
+  called this network what it is?
+- **`wgengine/magicsock`** and **`disco`** — one UDP socket, many
+  candidate paths, continuous re-probing, and an upgrade from relayed
+  to direct that happens later and by itself. That last part is the
+  behaviour to keep: `connect` already serves over the relay and
+  upgrades in the background, and whatever replaces DCUtR here has to
+  keep doing that rather than deciding once at dial time.
+- **The hard-NAT path.** Their documentation describes reaching a
+  symmetric NAT by sending to many ports at once, betting on a
+  collision. The arithmetic is a birthday problem: the far side opens
+  some number of mappings, we write to some number of ports, and the
+  chance of a match is the product against 65535. Find what numbers
+  they actually use, how long they spend, and what they do when it
+  fails.
+- **What we cannot take.** DERP is their relay and carrying data
+  through it is exactly what this project refuses. Read it to
+  understand the fallback they chose, and do not adopt it.
+
+The open design question underneath all of it: libp2p's DCUtR punches
+with one socket and cannot be handed a connection punched elsewhere.
+Either the punching moves below libp2p — a `quicreuse` socket that has
+already opened the path before QUIC uses it, which
+`internal/transport/selfaddr.go` shows is reachable — or this project
+learns to dial a peer without DCUtR's help. Decide that after reading,
+not before.
+
+One thing already known and worth acting on separately: two peers with
+real IPv6 have no NAT between them at all. The hotspot has a
+`2404:c0::/32` address and the home line has none, which is a question
+for an ISP rather than for this repo, and it would remove the problem
+on that pair entirely.
 
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
@@ -545,8 +616,8 @@ the address that gets published.
 Which leaves one suspect and one measurement. `/ratatoskr/observed/
 1.0.0` asks a relay for this machine's public address and an
 `AddrsFactory` advertises it; a peer dials it some seconds later.
-`internal/transport/wiretap.go` already counts what libp2p's own QUIC
-socket sends and to where, so the test is to run the agent with the
+`internal/transport/wiretap.go` (now `selfaddr.go`) already counts what
+libp2p's own QUIC socket sends and to where, so the test is to run the agent with the
 tap on and compare the port its packets actually leave from with the
 port it advertised. If those differ by one, DCUtR has been dialling a
 port nobody was behind for the whole of this step, and neither libp2p

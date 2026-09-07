@@ -92,6 +92,14 @@ Three facts to hold on to:
    ratatoskr, over `127.0.0.1`.
 2. Neither server holds a key that opens a file, and neither is on the
    data path unless the relay is in use — and then it forwards ciphertext.
+   **Noted during step 3.** `SPEC.md` §24 allows the relay to carry file
+   data when no direct path can be established, and that stands. The
+   owner's operating constraint is stricter: no egress billed to this
+   VPS. Nothing in the design changes — heimdall still forwards
+   ciphertext it cannot read — but the consequence for the build order
+   does. Step 3 cannot be closed by falling back, because on the
+   carrier tested the fallback would be the ordinary path for a phone
+   reaching a laptop at home. See `TODO.md` step 3.
 3. The heavy line at the bottom is the only path file bytes take.
 
 ---
@@ -734,6 +742,10 @@ lan       dialled from mDNS, no relay in the dial set
 direct    a direct address, possibly after a successful hole punch
 relay     going through heimdall; these bytes cost money
 ```
+
+`relay` is a state to report and get out of. `SPEC.md` §263 says as
+much — the relay must not become the normal data path — and step 3
+found a carrier on which, so far, it would be exactly that.
 
 The UI:
 

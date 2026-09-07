@@ -56,37 +56,61 @@ server and no Internet. Still open: the Windows and Linux runs, the
 firewall prompts, and the unplugged-router test.
 
 `run` answers the echo protocol only; the File API is step 4. `connect`
-has no `--via` flag yet, because LAN is the only path that exists.
+gained `--via lan|relay|auto` with step 3.
 
 `transport.DialPeer` strips circuit addresses from the dial set. That is
 load-bearing, not tidiness: a peer found on the LAN must be reached on
 the LAN or not at all.
 
-**TODO step 3 is half done.** `cmd/heimdall` is a circuit relay v2 node.
-The agent enables AutoNAT, DCUtR and the relay client when `config.json`
-names a relay, and `connect --via lan|relay|auto` picks a path — `auto`
-gives the LAN a 400 ms head start, per `PLAN.md` §6. All of it is
-verified on loopback only. The measurements that justify libp2p need
-heimdall on a real VPS and are still missing.
+**TODO step 3 is open, and it is the step that matters.** `cmd/heimdall`
+is a circuit relay v2 node on a real VPS. The agent enables AutoNAT,
+DCUtR and the relay client when `config.json` names a relay, and
+`connect --via lan|relay|auto` picks a path — `auto` gives the LAN a
+400 ms head start, per `PLAN.md` §6. LAN and relay are measured: 65
+MB/s over Wi-Fi, 3.7 MB/s relayed.
 
-Three traps this step exposed. libp2p marks a relayed connection
+**What is not solved is a phone on a public network reaching a laptop
+at home, and that is the ordinary case rather than an edge one.** The
+carrier tested gives every new destination an unrelated port, so no
+address a third party observes names the door a peer must dial. A
+punch lands in 251 ms when the agent is seconds old and never once it
+is minutes old; a measured address, a span of five and a span of
+sixty-six have all failed. The requirement is no file bytes through the
+VPS — no egress, not a little — so "fall back to the relay" is not an
+answer here. `TODO.md` step 3 carries the numbers and the plan, which
+is to read Tailscale's `net/portmapper`, `net/netcheck`,
+`wgengine/magicsock` and `disco` and take what applies. Do not adopt
+DERP; carrying data through a relay is the one thing this project
+refuses.
+
+Four traps this step exposed. libp2p marks a relayed connection
 *limited* and refuses streams on it unless the dial passes
 `network.WithAllowLimitedConn`. AutoNAT wants several independent peers
 to agree before it rules a machine unreachable, and a private drive
 never has that many, so configuring a relay now forces the reservation
-and `RATATOSKR_ASSUME_PUBLIC` opts a genuinely reachable machine out.
-And a
+and `RATATOSKR_ASSUME_PUBLIC` opts a genuinely reachable machine out. A
 circuit address does not appear in `host.Addrs()` on loopback, so `run`
 prints the peer id to copy rather than an address it cannot promise.
+And one machine takes every terminal window down the moment the agent
+opens a multicast socket — a content filter below the socket fails
+every packet to 224.0.0.251 — so `RATATOSKR_NO_MDNS` exists to run the
+agent without one.
 
-A machine learns its own public address by asking a relay, over
-`/ratatoskr/observed/1.0.0`, and advertises it through an `AddrsFactory`.
-A STUN reflector cannot answer this: it names the socket that asked, and
-a NAT that renumbers ports gives libp2p's QUIC socket a different
-external port. `internal/stun` therefore serves `natcheck` and
-`punchtest` only — the mapping-class measurement, not address discovery.
-`scripts/punch.py` is the same punch test with no libp2p in it, and is
-the control every DCUtR failure needs beside it.
+A machine learns its public address two ways, and the difference is the
+whole of step 3. Asking a relay over `/ratatoskr/observed/1.0.0` names
+the port of a connection opened at startup, which on a carrier that
+renumbers is stale within minutes. `internal/transport/selfaddr.go`
+wraps libp2p's own QUIC socket through
+`quicreuse.OverrideListenUDP`, asks a reflector on it at the moment
+DCUtR needs an address, and claims the reply before quic-go sees it —
+so the address offered is measured on the socket that punches, when it
+punches. That is correct and still insufficient here, because the port
+toward a peer is not the port toward a reflector.
+
+`scripts/punch.py` is the same punch with no libp2p in it, and is the
+control every DCUtR failure needs beside it. `scripts/punchpair.sh`
+runs `punch-quic` on both machines against a rendezvous on the VPS, so
+neither needs an operator waiting on the other.
 
 Nothing else in `PLAN.md`'s package layout exists yet.
 
