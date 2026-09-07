@@ -461,6 +461,42 @@ through it, intercept the reply before quic-go sees it, and hand the
 answer to the DCUtR address filter that `EnableHolePunching` already
 takes.
 
+**Built, and it settles the question by failing.** The punch now offers
+two addresses — the relay's view and one measured on libp2p's own
+socket at the moment DCUtR asks — and an agent four minutes old still
+stays relayed. The numbers say why. The relay had observed
+`182.6.166.95:35749`; the reflector, asked seconds before the punch on
+the socket that would do the punching, answered `61482`. The round
+before gave `63369` against `35722`. Those gaps are not a counter
+drifting. They are unrelated ports, tens of thousands apart, in both
+directions.
+
+So the mapping is not stale, it is per-destination. A reflector can
+only name the door this socket uses toward *that reflector*, and the
+peer is always a different destination behind a different door. This
+carrier is symmetric in the RFC 4787 sense, and nothing a third party
+observes can name the address a peer must dial. The 251 ms success
+above is real and not a contradiction: a freshly started agent had its
+relay door and its peer door two apart, which a span of three covered.
+Minutes later they are nowhere near each other, which is exactly why
+that spread passed its test and would have failed in use.
+
+That is the end of the road for hole punching on this network, and it
+is the answer the step existed to find rather than a failure to reach
+one. A symmetric carrier leaves the relay, which is what `PLAN.md` put
+heimdall there for and what it already carries as ciphertext.
+
+`natcheck` still calls this network endpoint-independent. It is narrow
+rather than wrong: four observers asked inside one second do agree, and
+the disagreement needs a longer window or an older socket. A NAT
+classification taken at startup therefore says less than it appears to.
+Worth fixing when it next matters; not worth trusting now.
+
+The measurement stays. It removed a toggle nobody could have set, costs
+one reflector round trip per punch, and on any network whose published
+address is merely old rather than per-destination it is the address
+that works. It simply cannot rescue this one.
+
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
 connects: QUIC handshakes as the first thing the socket ever sends to

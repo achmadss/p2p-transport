@@ -2,5 +2,5 @@ dist/
 *.exe
 *.test
 .DS_Store
-nattest-*.log
+*.log
 sidebyside.pcap
