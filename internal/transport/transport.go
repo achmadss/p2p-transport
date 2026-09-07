@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 
 	"sync/atomic"
@@ -275,16 +276,38 @@ func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiadd
 	if mapped == "" {
 		return as
 	}
-	fresh, ok := quicAddr(mapped)
-	if !ok {
-		return as
-	}
-	for _, a := range as {
-		if a.Equal(fresh) {
-			return as
+	out := append(as[:0:0], as...)
+	for _, fresh := range quicAddrs(mapped, nextDoors) {
+		if !has(out, fresh) {
+			out = append(out, fresh)
 		}
 	}
-	return append(append(as[:0:0], as...), fresh)
+	return out
+}
+
+// nextDoors is how many ports above the measured one to offer.
+//
+// This carrier hands a new port to each new destination and appears to
+// hand them out in order: the reflector we ask is one destination and
+// the peer is the next, so the peer's port is the measured one plus a
+// small step rather than the measured one itself. A bare punch spread
+// over a span crossed on the first attempt when the span was anchored
+// to a fresh measurement, and never crossed when it was anchored to the
+// relay's view from startup — which is thousands of ports away and was
+// the mistake that made an earlier spread look like a dead end.
+//
+// Four, because that is a handful of extra dials against a punch that
+// otherwise cannot happen, and because a span wide enough to cover a
+// random port would be thousands of addresses and is not a fix.
+const nextDoors = 4
+
+func has(as []multiaddr.Multiaddr, a multiaddr.Multiaddr) bool {
+	for _, have := range as {
+		if have.Equal(a) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f punchFilter) FilterRemote(_ peer.ID, as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
@@ -333,9 +356,9 @@ var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 // handshake needs a forwarded port rather than a punched one, so a TCP
 // address here would be inventing a route. Public only, because an
 // address a third party cannot dial is worse than no address at all.
-// quicAddr turns a reflector's "ip:port" into the QUIC multiaddr a peer
-// can dial, and holds it to the same standard as an address a relay
-// reported.
+// quicAddrs turns a reflector's "ip:port" into the QUIC multiaddrs a
+// peer can dial — that port and the next few — holding each to the same
+// standard as an address a relay reported.
 //
 // The two observers speak different languages and the difference is easy
 // to miss: ObservedProto answers with a multiaddr because it is libp2p
@@ -344,20 +367,36 @@ var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 // first fails silently and every measurement is discarded — which is
 // exactly what happened, with the measured address printed in the log
 // immediately above the punch that ignored it.
-func quicAddr(hostPort string) (multiaddr.Multiaddr, bool) {
+func quicAddrs(hostPort string, extra int) []multiaddr.Multiaddr {
 	ip, port, err := net.SplitHostPort(hostPort)
 	if err != nil {
-		return nil, false
+		return nil
 	}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
-		return nil, false
+		return nil
+	}
+	base, err := strconv.Atoi(port)
+	if err != nil || base <= 0 {
+		return nil
 	}
 	family := "ip4"
 	if !addr.Unmap().Is4() {
 		family = "ip6"
 	}
-	return usableObserved(fmt.Sprintf("/%s/%s/udp/%s/quic-v1", family, addr.Unmap(), port))
+
+	var out []multiaddr.Multiaddr
+	for off := 0; off <= extra; off++ {
+		if base+off > 65535 {
+			break
+		}
+		a, ok := usableObserved(fmt.Sprintf("/%s/%s/udp/%d/quic-v1", family, addr.Unmap(), base+off))
+		if !ok {
+			return nil // the first one decides: a refusal is about the address, not the port
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 func usableObserved(s string) (multiaddr.Multiaddr, bool) {
