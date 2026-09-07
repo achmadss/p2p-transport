@@ -32,7 +32,7 @@ func punchtest() error {
 	}
 	defer c.Close()
 
-	peer, err := meetPeer(c)
+	peer, _, err := meetPeer(c)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,11 @@ func punchtest() error {
 // The socket that asks STUN is the socket that punches. An address
 // measured on any other one belongs to that one, which is the mistake
 // that cost this project an evening.
-func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
+// The second return is the address this socket published, which is what
+// the far side will aim at. Whoever punches needs it: an address that
+// was true when it was published and false a second later fails the
+// test in a way that reads exactly like a shut path.
+func meetPeer(c *net.UDPConn) (*net.UDPAddr, string, error) {
 	if room := os.Getenv("RATATOSKR_PUNCH_ROOM"); room != "" {
 		return meetInRoom(c, room)
 	}
@@ -168,7 +172,7 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 		}
 	}
 	if mapped == "" || keepalive == nil {
-		return nil, fmt.Errorf("no reflector answered, so this machine cannot name itself")
+		return nil, "", fmt.Errorf("no reflector answered, so this machine cannot name itself")
 	}
 
 	fmt.Printf("local port %d\n\n", c.LocalAddr().(*net.UDPAddr).Port)
@@ -194,18 +198,18 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	peer, err := net.ResolveUDPAddr("udp4", strings.TrimSpace(line))
 	if err != nil {
-		return nil, fmt.Errorf("not an address: %w", err)
+		return nil, "", fmt.Errorf("not an address: %w", err)
 	}
 	// Go resolves the empty string to :0 and reports no error, so an
 	// operator who presses enter on a blank line gets a test that sends
 	// every packet to nowhere and reports that nothing arrived — a
 	// failure indistinguishable from the one being investigated.
 	if peer.IP == nil || peer.IP.IsUnspecified() || peer.Port == 0 {
-		return nil, fmt.Errorf("no address given: paste the other machine's punch address")
+		return nil, "", fmt.Errorf("no address given: paste the other machine's punch address")
 	}
 
 	// Ask again now the waiting is over. A keepalive holds the mapping
@@ -216,7 +220,7 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 		fmt.Printf("\n  WARNING: my address changed while waiting, %s -> %s\n", mapped, r.Mapped)
 		fmt.Println("  the other machine is aiming at the old one; start over.")
 	}
-	return peer, nil
+	return peer, mapped, nil
 }
 
 // meetInRoom pairs the two machines through a rendezvous instead of an
@@ -228,11 +232,11 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, error) {
 // those two apart. The server names this socket the way a reflector does
 // and hands back the other machine's address as soon as it joins, so
 // both sides begin within one poll of each other.
-func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
-	at := config.String("RATATOSKR_PUNCH_RENDEZVOUS", "103.181.143.222:9600")
+func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, string, error) {
+	at := config.Str("RATATOSKR_PUNCH_RENDEZVOUS", "103.181.143.222:9600")
 	server, err := net.ResolveUDPAddr("udp4", at)
 	if err != nil {
-		return nil, fmt.Errorf("rendezvous address %q: %w", at, err)
+		return nil, "", fmt.Errorf("rendezvous address %q: %w", at, err)
 	}
 	fmt.Printf("waiting in room %q at %s for the other machine.\n", room, server)
 
@@ -249,7 +253,7 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
 	buf := make([]byte, 256)
 	for time.Now().Before(deadline) {
 		if _, err := c.WriteToUDP(hello, server); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		c.SetReadDeadline(time.Now().Add(time.Second))
 		n, from, err := c.ReadFromUDP(buf)
@@ -262,11 +266,16 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
 		}
 		fmt.Printf("  MY PUNCH ADDRESS:  %s\n", parts[0])
 		if parts[1] == "-" {
+			// The read deadline paces this loop only while the server
+			// stays quiet. It answers every poll, so without a wait the
+			// loop runs at the round trip and floods the rendezvous for
+			// however long the far side takes to arrive.
+			time.Sleep(time.Second)
 			continue
 		}
 		peer, err := net.ResolveUDPAddr("udp4", parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("rendezvous gave %q: %w", parts[1], err)
+			return nil, "", fmt.Errorf("rendezvous gave %q: %w", parts[1], err)
 		}
 		c.SetReadDeadline(time.Time{})
 		fmt.Printf("  PAIRED WITH:       %s\n", peer)
@@ -279,7 +288,7 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
 			fmt.Println("  this measures hairpinning, not a punch between two networks.")
 		}
 		fmt.Println()
-		return peer, nil
+		return peer, parts[0], nil
 	}
-	return nil, fmt.Errorf("no other machine joined room %q; start it there too", room)
+	return nil, "", fmt.Errorf("no other machine joined room %q; start it there too", room)
 }

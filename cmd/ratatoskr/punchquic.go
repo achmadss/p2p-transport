@@ -13,6 +13,8 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
@@ -51,9 +53,26 @@ func punchQUIC(role string) error {
 	}
 	defer c.Close()
 
-	peer, err := meetPeer(c)
+	peer, mine, err := meetPeer(c)
 	if err != nil {
 		return err
+	}
+
+	// A second opinion on this socket's own address, from a party that
+	// is not the one that published it.
+	//
+	// Every run paired by hand crossed; every run paired by the
+	// rendezvous reported nothing. That pattern accuses the address, not
+	// the network, and nothing so far has tested it: the punch aims at
+	// what the far side published and never asks whether what this side
+	// published is still where this side is. A reflector answers that in
+	// one round trip, and disagreement is the whole finding.
+	if seen := whereAmI(c); seen != "" && mine != "" && seen != mine {
+		fmt.Printf("  A THIRD PARTY SEES ME AT %s, not %s.\n", seen, mine)
+		fmt.Println("  the far side is aiming at an address this socket does not have,")
+		fmt.Println("  so nothing can arrive and the punch below proves nothing.")
+	} else if seen != "" {
+		fmt.Printf("  confirmed from outside: %s\n", seen)
 	}
 
 	// Punch first, in the open, and say how many packets crossed.
@@ -67,29 +86,15 @@ func punchQUIC(role string) error {
 	// Setting the window to zero makes QUIC the first thing this socket
 	// ever sends to the peer, which is the one condition the agent is
 	// always in and this test never was.
-	// config.Duration reads a zero as "unset" and hands back the default,
-	// which is right everywhere else and wrong here: zero is the setting.
 	raw := -1
-	if w := config.Duration("RATATOSKR_PUNCH_RAW", 15*time.Second); os.Getenv("RATATOSKR_PUNCH_RAW") != "0" && w > 0 {
-		// What a third party sees, on this socket, at the moment the
-		// punch starts and again when it ends.
-		//
-		// A run where nothing arrives has two shapes that read alike:
-		// the packets went to the right place and the path dropped
-		// them, or the address each side published stopped being its
-		// address before the first packet left. Only the second is a
-		// carrier that renumbers a live mapping, and no amount of
-		// staring at a zero tells them apart. One reflector call at
-		// each end of the window does.
-		before := whereAmI(c)
+	if w := bareWindow(); w > 0 {
 		raw = rawPunch(c, peer, w)
-		after := whereAmI(c)
 		fmt.Printf("  raw punch: %d packets arrived from the peer\n", raw)
-		if before != "" && after != "" && before != after {
-			fmt.Printf("  MY PORT MOVED during the punch: %s -> %s\n", before, after)
-			fmt.Println("  the peer was aiming at an address this socket no longer had.")
-		} else if before != "" {
-			fmt.Printf("  my address held at %s throughout.\n", before)
+		// The same question again, now that a window has passed. A
+		// carrier that renumbers a mapping while it is in use fails the
+		// punch for a reason no amount of retrying fixes.
+		if after := whereAmI(c); after != "" && mine != "" && after != mine {
+			fmt.Printf("  MY PORT MOVED during the punch: %s -> %s\n", mine, after)
 		}
 		if raw == 0 {
 			fmt.Println("  the path is shut, so this run says nothing about QUIC.")
@@ -154,6 +159,28 @@ func punchQUIC(role string) error {
 	fmt.Println("problem, and neither is quic-go: whatever fails in `connect` fails")
 	fmt.Println("above them both.")
 	return nil
+}
+
+// bareWindow reads how long to punch with bare packets.
+//
+// It cannot use config.Duration twice over. That helper treats a zero as
+// "unset" and hands back the default, and zero is the setting that puts
+// QUIC first. It also wants a unit, and punchpair.sh takes a plain
+// number of seconds from the command line — so "5" parsed as nothing,
+// fell back to fifteen, and every step of a walk-down would have
+// measured the same fifteen seconds while printing a smaller number.
+func bareWindow() time.Duration {
+	v := strings.TrimSpace(os.Getenv("RATATOSKR_PUNCH_RAW"))
+	if v == "" {
+		return 15 * time.Second
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return time.Duration(n) * time.Second
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return d
+	}
+	return 15 * time.Second
 }
 
 // whereAmI names this socket from outside, or returns "" if no

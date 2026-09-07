@@ -54,14 +54,6 @@ func Duration(name string, def time.Duration) time.Duration {
 	return def
 }
 
-// String reads a variable, falling back when it is unset or blank.
-func String(name, def string) string {
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		return v
-	}
-	return def
-}
-
 // List splits a comma-separated variable, ignoring blanks.
 func List(name string) []string {
 	var out []string

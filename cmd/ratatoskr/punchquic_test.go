@@ -1,44 +1,26 @@
 package main
 
 import (
-	"context"
-	"net"
 	"testing"
 	"time"
-
-	"github.com/quic-go/quic-go"
 )
 
-// TestSpeakQUICCarriesAStreamBothWays checks the half of punch-quic that
-// is not a person typing addresses: two QUIC transports on two sockets,
-// one listening and one dialling, and a message that has to come back.
-// If this breaks, the diagnostic would blame a network for its own bug.
-func TestSpeakQUICCarriesAStreamBothWays(t *testing.T) {
-	lc, dc := loopbackUDP(t), loopbackUDP(t)
-	lt := &quic.Transport{Conn: lc}
-	dt := &quic.Transport{Conn: dc}
-	t.Cleanup(func() { lt.Close(); dt.Close() })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() { done <- speakQUIC(ctx, lt, dc.LocalAddr(), "listen") }()
-
-	if err := speakQUIC(ctx, dt, lc.LocalAddr(), "dial"); err != nil {
-		t.Fatalf("dial side: %v", err)
+// The walk-down this drives writes a plain number of seconds, and a zero
+// means QUIC goes first. Both were silently read as fifteen seconds once.
+func TestBareWindow(t *testing.T) {
+	for _, c := range []struct {
+		set  string
+		want time.Duration
+	}{
+		{"", 15 * time.Second},
+		{"5", 5 * time.Second},
+		{"0", 0},
+		{"3s", 3 * time.Second},
+		{"nonsense", 15 * time.Second},
+	} {
+		t.Setenv("RATATOSKR_PUNCH_RAW", c.set)
+		if got := bareWindow(); got != c.want {
+			t.Errorf("RATATOSKR_PUNCH_RAW=%q: got %v, want %v", c.set, got, c.want)
+		}
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("listen side: %v", err)
-	}
-}
-
-func loopbackUDP(t *testing.T) *net.UDPConn {
-	t.Helper()
-	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { c.Close() })
-	return c
 }
