@@ -236,10 +236,19 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
 	}
 	fmt.Printf("waiting in room %q at %s for the other machine.\n", room, server)
 
+	// Who this machine is, for as long as this process lives. Without it
+	// the server can only tell members apart by source address, and a
+	// rerun arrives on a fresh port looking exactly like a second
+	// machine: it pairs at once, punches at its own dead mapping, and
+	// reports nothing arrived. That is the failure being investigated,
+	// manufactured by the tool investigating it.
+	me := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	hello := []byte(room + " " + me)
+
 	deadline := time.Now().Add(config.Duration("RATATOSKR_PUNCH_WAIT", 3*time.Minute))
 	buf := make([]byte, 256)
 	for time.Now().Before(deadline) {
-		if _, err := c.WriteToUDP([]byte(room), server); err != nil {
+		if _, err := c.WriteToUDP(hello, server); err != nil {
 			return nil, err
 		}
 		c.SetReadDeadline(time.Now().Add(time.Second))
@@ -260,7 +269,16 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, error) {
 			return nil, fmt.Errorf("rendezvous gave %q: %w", parts[1], err)
 		}
 		c.SetReadDeadline(time.Time{})
-		fmt.Printf("  PAIRED WITH:       %s\n\n", peer)
+		fmt.Printf("  PAIRED WITH:       %s\n", peer)
+		// Same public address on both sides means one carrier, and a
+		// punch that never crosses between two networks measures the
+		// carrier hairpinning to itself. Worth a run, never worth
+		// mistaking for the two-network result.
+		if mine, _, err := net.SplitHostPort(parts[0]); err == nil && mine == peer.IP.String() {
+			fmt.Println("  WARNING: both machines are behind the same public address.")
+			fmt.Println("  this measures hairpinning, not a punch between two networks.")
+		}
+		fmt.Println()
 		return peer, nil
 	}
 	return nil, fmt.Errorf("no other machine joined room %q; start it there too", room)
