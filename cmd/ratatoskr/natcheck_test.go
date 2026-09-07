@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/achmadss/p2p-transport/internal/stun"
 )
@@ -35,25 +36,60 @@ func TestVerdictCatchesPerDestinationPort(t *testing.T) {
 // opened at startup was still observed as 35749 minutes later, while a
 // reflector asked on the same socket seconds before a punch answered
 // 61482. One round cannot tell those apart from a stable NAT, because
-// every observer asked inside one second agrees. Two rounds can.
-func TestDriftSeparatesHeldMappingFromFreshDestination(t *testing.T) {
+// every observer asked inside one second agrees. Rounds spread over
+// three minutes can.
+func TestClassifySeparatesHeldMappingFromFreshDestination(t *testing.T) {
+	const base = "182.6.166.95:35749"
 	at := func(server, mapped string) stun.Reflection {
 		return stun.Reflection{Server: server, Mapped: mapped}
 	}
-	round1 := []stun.Reflection{at("a", "182.6.166.95:35749"), at("b", "182.6.166.95:35749")}
+	run := func(rs ...round) string { return classify(base, rs) }
 
-	steady := drift(round1, at("a", "182.6.166.95:35749"), at("c", "182.6.166.95:35749"))
+	steady := run(
+		round{at: 30 * time.Second, anchor: at("a", base), fresh: at("b", base)},
+		round{at: time.Minute, anchor: at("a", base), fresh: at("c", base)},
+	)
 	if !strings.Contains(steady, "Hole punching can work") {
 		t.Errorf("a NAT that does not move must pass: got %q", steady)
 	}
 
-	moved := drift(round1, at("a", "182.6.166.95:35749"), at("c", "182.6.166.95:61482"))
+	// The anchor holds all the way through. Only the reflectors meeting
+	// this socket for the first time are given the moved port, which is
+	// the shape a single round renders identical to the one above.
+	moved := run(
+		round{at: 30 * time.Second, anchor: at("a", base), fresh: at("b", base)},
+		round{at: time.Minute, anchor: at("a", base), fresh: at("c", "182.6.166.95:61482")},
+	)
 	if !strings.Contains(moved, "defeats publishing an address") {
 		t.Errorf("a held mapping beside a moved fresh one is the failing class: got %q", moved)
 	}
+	if !strings.Contains(moved, "1m0s 182.6.166.95:61482") {
+		t.Errorf("the round that moved must be named: got %q", moved)
+	}
 
-	gone := drift(round1, at("a", "182.6.166.95:61482"), at("c", "182.6.166.95:61483"))
+	gone := run(round{at: 30 * time.Second, anchor: at("a", "182.6.166.95:61482"), fresh: at("b", "182.6.166.95:61483")})
 	if !strings.Contains(gone, "did not survive") {
 		t.Errorf("a mapping that expired is a third answer: got %q", gone)
+	}
+
+	if got := classify(base, nil); !strings.Contains(got, "unknown") {
+		t.Errorf("no rounds is not a pass: got %q", got)
+	}
+}
+
+// Two hostnames of one provider often share an address. Such a reflector
+// answers from the mapping this socket already holds, so it agrees with
+// the anchor whatever the NAT does — counting it would manufacture the
+// passing verdict on exactly the network this command exists to catch.
+func TestClassifyIgnoresAReflectorAlreadySpokenTo(t *testing.T) {
+	const base = "182.6.166.95:35749"
+	at := func(server, mapped string) stun.Reflection {
+		return stun.Reflection{Server: server, Mapped: mapped}
+	}
+	only := classify(base, []round{
+		{at: 30 * time.Second, anchor: at("a", base), fresh: at("a-again", base), reused: true},
+	})
+	if !strings.Contains(only, "unknown") {
+		t.Errorf("a reused reflector is not evidence of anything: got %q", only)
 	}
 }

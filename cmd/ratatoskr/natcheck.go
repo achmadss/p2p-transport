@@ -32,12 +32,21 @@ func natcheck() error {
 	if len(servers) < 2 {
 		return fmt.Errorf("need at least two reflectors")
 	}
-	// The last reflector is held back. It is the only destination this
-	// socket will not have spoken to when the second round asks it, and
-	// a destination contacted for the first time is the only thing that
-	// can show an allocator that has moved.
-	held := servers[len(servers)-1]
-	first := servers[:len(servers)-1]
+	interval := config.Duration("RATATOSKR_NATCHECK_WAIT", 30*time.Second)
+	total := config.Duration("RATATOSKR_NATCHECK_FOR", 3*time.Minute)
+
+	// The anchor is re-asked every round. It answers from the mapping it
+	// was given in round one, so it says whether that mapping survives.
+	//
+	// Every other reflector is spent once and never asked again. A
+	// destination this socket has already spoken to cannot show that the
+	// allocator moved, because it still holds the port it was given; only
+	// a destination met for the first time is given the current value.
+	// A peer is always such a destination, which is why this is the
+	// question that matters and why the pool has to be long enough for
+	// one reflector per round.
+	anchor := servers[0]
+	fresh := servers[2:]
 
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
@@ -45,10 +54,11 @@ func natcheck() error {
 	}
 	defer c.Close()
 	local := c.LocalAddr().(*net.UDPAddr).Port
-	fmt.Printf("one socket, local port %d\n\n", local)
+	fmt.Printf("one socket, local port %d\n", local)
+	fmt.Printf("asking every %s for %s\n\n", interval, total)
 
 	// Round one: every observer inside a second, which is the test this
-	// command used to be.
+	// command used to be, and the whole of it.
 	//
 	// A rendezvous that is not a reflector is asked too. Three public
 	// reflectors agreeing is what this command used to call
@@ -58,38 +68,90 @@ func natcheck() error {
 	// was behind another, and nothing arrived. The reflectors agreed
 	// with each other because they are alike — large providers reached
 	// the same way out of the carrier.
-	fmt.Println("round one, all at once:")
-	var got []stun.Reflection
-	for _, s := range first {
-		got = append(got, stun.Ask(c, s))
-	}
-	got = append(got, askRendezvous(c))
-	report(got)
-	fmt.Println(verdict(got, local))
+	fmt.Println("round 0, all at once:")
+	round1 := []stun.Reflection{stun.Ask(c, servers[0]), stun.Ask(c, servers[1]), askRendezvous(c)}
+	report(round1)
+	fmt.Println(verdict(round1, local))
+	fmt.Println()
 
-	// Round two, later. Two questions that one round cannot separate.
-	//
-	// Re-asking a reflector from round one says whether a mapping this
-	// socket already holds survives. Asking the held-back reflector
-	// says what a destination contacted for the first time is given
-	// *now*. On this project's carrier the first answer holds and the
-	// second does not, and that pair is the whole of why a published
-	// address stops working: the mapping is minted when a destination
-	// is first spoken to, and the allocator has moved on since the
-	// address was published. A peer is always a first-time destination.
-	wait := config.Duration("RATATOSKR_NATCHECK_WAIT", 30*time.Second)
-	if wait <= 0 {
-		return nil
+	base := ""
+	for _, r := range round1 {
+		if r.Err == nil && r.Server == anchor {
+			base = r.Mapped
+		}
 	}
-	fmt.Printf("\nwaiting %s, then asking again...\n\n", wait)
-	time.Sleep(wait)
+	if base == "" {
+		return fmt.Errorf("the anchor reflector %s did not answer, so nothing can be compared against it", anchor)
+	}
 
-	fmt.Printf("round two, %s later:\n", wait)
-	again := stun.Ask(c, first[0])
-	fresh := stun.Ask(c, held)
-	report([]stun.Reflection{again, fresh})
-	fmt.Println(drift(got, again, fresh))
+	seen := map[string]bool{}
+	spoken := map[string]bool{}
+	for _, r := range round1 {
+		if r.Err == nil {
+			seen[r.Mapped] = true
+		}
+		if r.IP != nil {
+			spoken[r.IP.String()] = true
+		}
+	}
+
+	var rounds []round
+	for at := interval; at <= total; at += interval {
+		if len(fresh) == 0 {
+			fmt.Println("out of unused reflectors: stopping rather than re-asking one that already holds a mapping.")
+			break
+		}
+		time.Sleep(interval)
+
+		// A reflector that is down costs the round its only evidence,
+		// and the round cannot be taken again — the next one is a
+		// different moment. So spend another from the pool instead.
+		r := round{at: at, anchor: stun.Ask(c, anchor)}
+		var next string
+		for len(fresh) > 0 {
+			next, fresh = fresh[0], fresh[1:]
+			if r.fresh = stun.Ask(c, next); r.fresh.Err == nil {
+				break
+			}
+			fmt.Printf("  %-32s  unreachable: %v\n", next, r.fresh.Err)
+		}
+		if r.fresh.IP != nil && spoken[r.fresh.IP.String()] {
+			r.reused = true
+		}
+		rounds = append(rounds, r)
+		fmt.Printf("round %s:\n", at)
+		report([]stun.Reflection{r.anchor, r.fresh})
+		if r.reused {
+			fmt.Printf("  (%s shares an address with a reflector already asked, so its answer is not evidence)\n\n", next)
+		}
+		for _, x := range []stun.Reflection{r.anchor, r.fresh} {
+			if x.Err == nil {
+				seen[x.Mapped] = true
+			}
+			if x.IP != nil {
+				spoken[x.IP.String()] = true
+			}
+		}
+	}
+
+	fmt.Println(classify(base, rounds))
+	fmt.Printf("\ndistinct addresses this one socket was seen as: %d\n  %s\n",
+		len(seen), strings.Join(sorted(seen), "\n  "))
 	return nil
+}
+
+// round is one later question, asked twice: of a reflector that already
+// holds a mapping for this socket, and of one meeting it for the first
+// time.
+type round struct {
+	at            time.Duration
+	anchor, fresh stun.Reflection
+	// reused is set when the "fresh" reflector turned out to resolve to
+	// an address this socket had already spoken to. Two hostnames of one
+	// provider often share an address, and such a reflector answers from
+	// the mapping it was already given — it looks like agreement and
+	// proves nothing. Counting it would manufacture the passing verdict.
+	reused bool
 }
 
 func report(got []stun.Reflection) {
@@ -103,40 +165,46 @@ func report(got []stun.Reflection) {
 	fmt.Println()
 }
 
-// drift compares the second round with the first and names the class
-// that a single round cannot see: a NAT whose existing mappings hold
-// while a destination met for the first time is given a different port.
-// No RFC 4787 term covers it, because RFC 4787 asks its questions at one
-// moment. It is the class that defeats every form of address
-// publication, since a peer is always a first-time destination and the
-// address reaches it later than it was measured.
-func drift(round1 []stun.Reflection, again, fresh stun.Reflection) string {
-	if again.Err != nil || fresh.Err != nil {
-		return "round two did not complete: the result is unknown, not good."
-	}
-	var was string
-	for _, r := range round1 {
-		if r.Err == nil && r.Server == again.Server {
-			was = r.Mapped
+// classify names the class that a single round cannot see: a NAT whose
+// existing mappings hold while a destination met for the first time is
+// given a different port. No RFC 4787 term covers it, because RFC 4787
+// asks its questions at one moment. It is the class that defeats every
+// form of address publication, since a peer is always a first-time
+// destination and the address reaches it later than it was measured.
+func classify(base string, rounds []round) string {
+	var moved []string
+	for _, r := range rounds {
+		if r.anchor.Err == nil && r.anchor.Mapped != base {
+			return "The mapping did not survive: the anchor saw " + base + " and at " +
+				r.at.String() + " sees " + r.anchor.Mapped + ".\n" +
+				"Nothing this socket is seen as can be published, because it does not last long enough to be dialled."
+		}
+		if r.reused {
+			continue
+		}
+		if r.fresh.Err == nil && r.fresh.Mapped != base {
+			moved = append(moved, r.at.String()+" "+r.fresh.Mapped)
 		}
 	}
-	held := was == again.Mapped
-
-	switch {
-	case held && fresh.Mapped == again.Mapped:
-		return "The mapping held and a first-time destination was given the same port.\n" +
-			"An address measured now is still an address a peer may dial later. Hole punching can work."
-	case held:
-		return "The mapping held (" + again.Mapped + ") but a destination met for the first time was given " +
-			fresh.Mapped + ".\n" +
-			"This is the class that defeats publishing an address: the port is minted when a destination is\n" +
-			"first spoken to, and a peer is always a first-time destination reached later than the measurement.\n" +
-			"Publish one address and it will be wrong. Several observed addresses, refreshed while the agent\n" +
-			"runs, are the only thing that can be right."
-	default:
-		return "The mapping did not survive: " + again.Server + " saw " + was + " and now sees " + again.Mapped + ".\n" +
-			"Nothing this socket is seen as can be published, because it does not last long enough to be dialled."
+	asked := 0
+	for _, r := range rounds {
+		if !r.reused && r.fresh.Err == nil {
+			asked++
+		}
 	}
+	if asked == 0 {
+		return "no first-time destination answered in any later round: the result is unknown, not good."
+	}
+	if len(moved) == 0 {
+		return "The mapping held for the whole run and every first-time destination was given the same port.\n" +
+			"An address measured now is still an address a peer may dial later. Hole punching can work."
+	}
+	return "The mapping held (" + base + ") but a destination met for the first time was given another port:\n  " +
+		strings.Join(moved, "\n  ") + "\n" +
+		"This is the class that defeats publishing an address: the port is minted when a destination is\n" +
+		"first spoken to, and a peer is always a first-time destination reached later than the measurement.\n" +
+		"Publish one address and it will be wrong. Several observed addresses, refreshed while the agent\n" +
+		"runs, are the only thing that can be right."
 }
 
 // askRendezvous asks the pairing server what it sees, shaped as a

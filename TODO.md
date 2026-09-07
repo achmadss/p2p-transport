@@ -641,19 +641,39 @@ incremental ones on a `periodicReSTUNTimer`, each one re-running
 `determineEndpoints` and republishing the set. An address is never
 older than a few minutes, and there are several of them.
 
-**And `natcheck` now asks the question one round cannot.** Round one is
-what it always was. Then it waits — `RATATOSKR_NATCHECK_WAIT`, 30s by
-default — and asks two things: a reflector it already spoke to, and one
-reflector deliberately **held back** so that round two is its first
-contact. The pair separates three classes that a single round renders
-identical: the mapping held and a first-time destination got the same
-port (publishable); the mapping held but a first-time destination got a
-different one (this carrier — the class that defeats publishing, since a
-peer is always a first-time destination reached after the measurement);
+**And `natcheck` now asks the question one round cannot.** Round zero is
+what the command always was. Then it repeats every
+`RATATOSKR_NATCHECK_WAIT` (30s) for `RATATOSKR_NATCHECK_FOR` (3m), and
+each round asks two things: an **anchor** reflector re-asked every time,
+which says whether the mapping this socket already holds survives, and
+one reflector **spent once and never asked again**, which is the only
+kind that can show the allocator has moved — a destination already
+spoken to answers from the port it was given then. A peer is always a
+first-time destination, which is what makes that the question worth
+asking. Six rounds separate three classes a single round renders
+identical: the mapping held and every first-time destination got the
+same port (publishable); the mapping held but a first-time destination
+got a different one (this carrier — the class that defeats publishing);
 or the mapping did not survive at all. RFC 4787 has no name for the
 middle one because it asks its questions at a single moment.
-`TestDriftSeparatesHeldMappingFromFreshDestination` pins it to the real
-numbers, `35749` held beside a fresh `61482`.
+`TestClassifySeparatesHeldMappingFromFreshDestination` pins it to the
+real numbers, `35749` held beside a fresh `61482`.
+
+Two things the first version of that got wrong, both caught by running
+it. The reflector list was five `stunN.l.google.com` hosts and they all
+resolve to **one address**, so five rounds asked the same destination
+five times, agreed with themselves, and printed a pass. `natcheck` now
+records every address it has spoken to and refuses to count a reflector
+that shares one, saying so on the line; `Servers()` is eight operators
+that each answered from this house on 7 Sep 2026 on eight distinct
+addresses. And a reflector that is down used to cost a round its only
+evidence, so a round now spends another from the pool rather than
+returning empty — the round cannot be retaken, because the next one is a
+different moment.
+
+Run from home, 7 Sep 2026: six rounds, six operators, one port
+(`180.252.216.153:63397`) throughout. This line is not the problem and
+never was.
 
 **Pass/fail: passed by giving the opposite result to the one the item
 assumed.** Tailscale's probe would call this network endpoint-independent

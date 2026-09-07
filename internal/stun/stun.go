@@ -23,17 +23,32 @@ import (
 	"github.com/achmadss/p2p-transport/internal/config"
 )
 
-// Servers are the reflectors. Three by default, on at least two
-// distinct addresses, because one address cannot tell an
-// endpoint-independent mapping from an address-dependent one.
+// Servers are the reflectors. Two are the minimum, because one address
+// cannot tell an endpoint-independent mapping from an address-dependent
+// one. The list is long because `natcheck` spends one of them per round
+// and never reuses it: a destination this socket has already spoken to
+// answers from the mapping it was given then, so only a destination met
+// for the first time can show that the allocator has moved. Six rounds
+// over three minutes needs six unused reflectors, and several providers
+// rather than one, since hosts of the same provider can share an
+// address and would not be distinct destinations at all. Every entry
+// here answered from this house on 7 Sep 2026 and every one resolved to
+// a different address; the five `stunN.l.google.com` hosts that used to
+// be here share one, which made a round look like agreement while
+// asking nobody new.
 func Servers() []string {
 	if s := config.List("RATATOSKR_STUN"); len(s) > 0 {
 		return s
 	}
 	return []string{
 		"stun.l.google.com:19302",
-		"stun1.l.google.com:19302",
 		"stun.cloudflare.com:3478",
+		"stun.nextcloud.com:3478",
+		"stun.sipgate.net:3478",
+		"stun.voipbuster.com:3478",
+		"stun.antisip.com:3478",
+		"stun.t-online.de:3478",
+		"stun.voip.blackberry.com:3478",
 	}
 }
 
