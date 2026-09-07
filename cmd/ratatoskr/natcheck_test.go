@@ -30,3 +30,30 @@ func TestVerdictCatchesPerDestinationPort(t *testing.T) {
 		t.Errorf("one dissenting observer must sink the verdict: got %q", got)
 	}
 }
+
+// The numbers are this carrier's, on 7 Sep 2026: a relay connection
+// opened at startup was still observed as 35749 minutes later, while a
+// reflector asked on the same socket seconds before a punch answered
+// 61482. One round cannot tell those apart from a stable NAT, because
+// every observer asked inside one second agrees. Two rounds can.
+func TestDriftSeparatesHeldMappingFromFreshDestination(t *testing.T) {
+	at := func(server, mapped string) stun.Reflection {
+		return stun.Reflection{Server: server, Mapped: mapped}
+	}
+	round1 := []stun.Reflection{at("a", "182.6.166.95:35749"), at("b", "182.6.166.95:35749")}
+
+	steady := drift(round1, at("a", "182.6.166.95:35749"), at("c", "182.6.166.95:35749"))
+	if !strings.Contains(steady, "Hole punching can work") {
+		t.Errorf("a NAT that does not move must pass: got %q", steady)
+	}
+
+	moved := drift(round1, at("a", "182.6.166.95:35749"), at("c", "182.6.166.95:61482"))
+	if !strings.Contains(moved, "defeats publishing an address") {
+		t.Errorf("a held mapping beside a moved fresh one is the failing class: got %q", moved)
+	}
+
+	gone := drift(round1, at("a", "182.6.166.95:61482"), at("c", "182.6.166.95:61483"))
+	if !strings.Contains(gone, "did not survive") {
+		t.Errorf("a mapping that expired is a third answer: got %q", gone)
+	}
+}

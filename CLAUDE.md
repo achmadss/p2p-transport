@@ -77,9 +77,13 @@ punch lands in 251 ms when the agent is seconds old and never once it
 is minutes old; a measured address, a span of five and a span of
 sixty-six have all failed. The requirement is no file bytes through the
 VPS — no egress, not a little — so "fall back to the relay" is not an
-answer here. `TODO.md` step 3 carries the numbers and the plan, which
-is to read Tailscale's `net/portmapper`, `net/netcheck`,
-`wgengine/magicsock` and `disco` and take what applies. It is cloned at
+answer here. `TODO.md` step 3 carries the numbers and the plan. Tailscale's
+`net/portmapper`, `net/netcheck`, `wgengine/magicsock` and `disco` have
+now been read, and the decision is written down there: keep DCUtR and
+hand it a *set* of independently measured addresses refreshed every 27
+seconds, rather than the one stale address it has been given all along.
+Port mapping is closed on both ends and the birthday attack is not in
+Tailscale's source at all. It is cloned at
 `/Users/achmad/Documents/Belajar/tailscale` — a sibling to read, not a
 dependency; nothing here imports it and `CGO_ENABLED=0` and the
 package layout in `PLAN.md` §17 still bind. Read `derp` to understand

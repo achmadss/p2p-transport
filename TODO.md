@@ -99,7 +99,8 @@ choice. Do it before anything depends on the answer.
       hard one**: a phone on a public network reaching a laptop at home
       is what the product is for, so a relay-only answer here is a
       failed step, not a finished one.
-- [ ] Read Tailscale and take what applies (see below)
+- [x] Read Tailscale and take what applies (see below). Read 7 Sep 2026;
+      the decision is written down and the spike is what remains
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
@@ -592,13 +593,211 @@ real IPv6 have no NAT between them at all. The hotspot has a
 for an ISP rather than for this repo, and it would remove the problem
 on that pair entirely.
 
+### Read: `net/netcheck`, 7 Sep 2026
+
+**Their classifier asks our question and would have been wrong the same
+way.** `MappingVariesByDestIP` is set in `addNodeLatency`
+(`net/netcheck/netcheck.go:723`): keep the first `AddrPort` an IPv4 STUN
+reply carries, and set the flag if a later reply on the same socket
+carries a different one. One socket, several destinations, compare —
+which is `natcheck` exactly. Their window is `ReportTimeout = 5s`
+against our one second, and on this carrier every observer inside either
+window agrees. So reimplementing their question does not produce a
+verdict matching what was measured; it reproduces our wrong one. That is
+the answer to the item, and it is not the answer it expected.
+
+What makes their system work anyway is that **nothing downstream asks
+the classifier whether to punch.** `MappingVariesByDestIP` is used for
+one thing in `determineEndpoints`
+(`wgengine/magicsock/magicsock.go:1336`): when it is true and a fixed
+local port is configured, add one extra guess — the observed IP with the
+*local* port, on the chance the user forwarded it by hand. That is all.
+The punching happens regardless.
+
+**The part worth taking is `GetGlobalAddrs`** (`netcheck.go:137`). They
+do not publish an address. They publish a *set*: the best-latency
+observation, plus every other observed `AddrPort` seen **more than
+once**, single sightings dropped as hard-NAT noise. The comment names
+our carrier without having met it — "bad NATs that start to provide new
+mappings for new STUN sessions mid-expiration, even while a live mapping
+for the best latency endpoint still exists ... new traffic to the old
+endpoint will not succeed, but new traffic to the newly discovered
+endpoints does succeed."
+
+That is not the span of ports this step already measured and rejected.
+A span is arithmetic — `+1`, `+3`, `+64` — and it failed because the
+doors are not ordered. A set of *separately observed* addresses is
+evidence, and every member of it was a real door at some moment. The
+cost is bounded by how many the NAT actually minted, not by how far we
+are willing to guess.
+
+Two supporting facts make the set stay true. netcheck sends its STUN
+through magicsock's own data socket (`sendUDPNetcheck`,
+`magicsock.go:1605` → `c.pconn4`), not a throwaway, so every observation
+belongs to the socket that will carry the traffic — the property
+`internal/transport/selfaddr.go` had to build by hand here. And it runs
+again: a full report at most every 5 minutes (`fullReportInterval`),
+incremental ones on a `periodicReSTUNTimer`, each one re-running
+`determineEndpoints` and republishing the set. An address is never
+older than a few minutes, and there are several of them.
+
+**And `natcheck` now asks the question one round cannot.** Round one is
+what it always was. Then it waits — `RATATOSKR_NATCHECK_WAIT`, 30s by
+default — and asks two things: a reflector it already spoke to, and one
+reflector deliberately **held back** so that round two is its first
+contact. The pair separates three classes that a single round renders
+identical: the mapping held and a first-time destination got the same
+port (publishable); the mapping held but a first-time destination got a
+different one (this carrier — the class that defeats publishing, since a
+peer is always a first-time destination reached after the measurement);
+or the mapping did not survive at all. RFC 4787 has no name for the
+middle one because it asks its questions at a single moment.
+`TestDriftSeparatesHeldMappingFromFreshDestination` pins it to the real
+numbers, `35749` held beside a fresh `61482`.
+
+**Pass/fail: passed by giving the opposite result to the one the item
+assumed.** Tailscale's probe would call this network endpoint-independent
+too. Ours now does not, and the reason it now does not is a question
+Tailscale never asks — because their design does not need the answer.
+
+### Read: `net/portmapper`, 7 Sep 2026
+
+All three protocols are tried, and the order is not the obvious one.
+NAT-PMP and PCP share port 5351 and are attempted together in
+`createOrGetMapping` (`net/portmapper/portmapper.go:550`), PMP by
+default and PCP only when a recent probe saw PCP and not PMP. UPnP on
+1900 is the fallback, taken when neither answered within
+`portMapServiceTimeout`. Before any of it, `gatewayAndSelfIP` refuses
+outright if the default gateway is not in a private range
+(`ErrGatewayRange`) — a machine whose gateway is already public has
+nothing to ask.
+
+**What they do with a router that cannot name its external address is
+the answer to our question, and it is: prefer, then settle, then fail.**
+`selectBestService` (`net/portmapper/upnp.go:350`) scores every UPnP
+device on three properties — connected, has an external IP, and that IP
+is not private — and returns immediately on a device with all three. If
+none has all three it falls back in order to connected-with-private-IP,
+then merely connected. So Tailscale *will* use a router whose external
+address is RFC 1918, and publish the resulting endpoint as one more
+candidate that costs nothing when it fails.
+
+That is not our case. Our router returned an **empty string**, not a
+private address. `netip.ParseAddr("")` fails, the device scores nothing,
+and `getUPnPPortMapping` (`upnp.go:630`) re-asks and returns the error
+rather than mapping. Tailscale gets exactly what we got here: nothing.
+The only case they handle that we did not is `0.0.0.0` and loopback,
+rejected explicitly with a bug number attached.
+
+**Pass/fail: the explanation is measured, and it is that the mapping is
+useless for a reason no code can route around.** The house has one NAT
+we can talk to and one we cannot. The router accepts `AddPortMapping`
+and the forward does nothing, because the address the forward is
+attached to is itself behind the carrier's NAT; the router cannot report
+an external address because it does not have one. Tailscale would
+publish that endpoint anyway on a private-IP router and it would fail
+the same way — theirs is a cheap extra candidate, not a fix.
+
+**And the phone side can never be mapped.** The phone is the gateway,
+the carrier NAT is above it, and a carrier offers no PCP, NAT-PMP or
+UPnP to a subscriber. There is nothing on that side to ask. Port mapping
+is closed as an avenue for this pair, on both ends, for different
+reasons — and that is now established rather than assumed.
+
+### Read: `wgengine/magicsock` and `disco`, 7 Sep 2026
+
+**The birthday attack is not in the source.** The plan above listed
+"send to many ports at once, bet on a collision" as Tailscale's
+hard-NAT path and asked for their numbers. There are no numbers, because
+there is no such code. `hard NAT` appears twice in the whole tree: once
+in `determineEndpoints` to add a single extra candidate, and once in
+`GetGlobalAddrs` to *drop* endpoints seen only once as hard-NAT noise.
+Nothing sprays ports. That closes the last idea this step was holding in
+reserve, and it closes it by finding out that the system we were going
+to copy does not do it either.
+
+What they do instead has two halves, and both are takeable.
+
+**Half one: an address is a set, and it is never more than 27 seconds
+old.** `endpointsFreshEnoughDuration = 27 * time.Second`, with the
+comment "UDP NAT mappings typically expire at 30 seconds, so this is a
+few seconds shy of that". `enqueueCallMeMaybe`
+(`magicsock.go:2617`) — their DCUtR CONNECT — checks that clock
+*before signalling*, and if the endpoints are older it re-runs STUN and
+re-enters itself when the fresh answer lands. Only then does it send
+`disco.CallMeMaybe{MyNumber: eps}`, carrying every endpoint at once.
+Our `/ratatoskr/observed/1.0.0` answer is minutes old by construction
+and there is one of it.
+
+**Half two: the path is chosen by what answers, not by what was
+planned.** `sendDiscoPingsLocked` (`endpoint.go:1415`) pings *every*
+candidate endpoint in parallel, rate-limited per endpoint by
+`discoPingInterval`, and the first pong wins. `heartbeatInterval` is 3s,
+`trustUDPAddrDuration` 6.5s — a direct path is trusted as exclusive only
+that long without a pong, and DERP resumes if it goes quiet.
+`goodEnoughLatency` is 5ms, below which no better path is sought. So the
+upgrade is not a decision taken once at dial time; it is a race that
+keeps being re-run for the life of the session. `connect` already serves
+over the relay and upgrades in the background, which is the same shape,
+but it upgrades once.
+
+**And their current answer for a pair that cannot punch is not only
+DERP.** `net/udprelay` and `wgengine/magicsock/relaymanager.go` are
+Tailscale Peer Relays: one *node in the user's own tailnet*, with a
+routable address, forwards UDP for two nodes that failed to meet.
+`discoverUDPRelayPathsInterval` is 30s. That is worth naming here
+because it is the one relay shape `SPEC.md` §24 does not forbid — the
+bytes stay on the user's own hardware, which is the whole point of the
+amendment. It is not heimdall carrying file data; it is the user's
+desktop carrying it for the user's phone.
+
+### 4. The decision, written before building it
+
+The two shapes offered were "punch below libp2p" and "dial without
+DCUtR". **Neither. Keep DCUtR and fix what is handed to it**, because
+the reading says our failure is in the input and not in the mechanism.
+
+DCUtR's CONNECT already carries an address *list*. Every attempt in this
+step handed it one address — stale from the relay, then freshly measured
+from a reflector, then one address plus arithmetic. Tailscale hands over
+a set, and the set is built from independent observations rather than
+from a rule. Three changes, all inside code that already exists:
+
+- **Ask several reflectors through `internal/transport/selfaddr.go`,
+  not one.** It already owns libp2p's QUIC socket through
+  `quicreuse.OverrideListenUDP`. Keep every distinct answer, and follow
+  `GetGlobalAddrs` in dropping any seen only once — a single sighting is
+  a door that was minted for that observer alone.
+- **Re-measure on a clock shorter than the mapping lifetime**, and
+  refresh before signalling rather than once at startup. 27 seconds is
+  their number and there is no reason to invent another.
+- **Publish the set through the `AddrsFactory` that is already there.**
+
+The honest caveat, stated so the spike is not read as a promise: on this
+carrier a reflector saw `61482` while the relay saw `35749`, tens of
+thousands apart, so the ports toward observers may all be wrong about
+the port toward a peer. What makes it worth measuring anyway is that
+every member of the set is a door this socket really opened, and
+`GetGlobalAddrs`'s own comment describes precisely this NAT — "new
+traffic to the old endpoint will not succeed, but new traffic to the
+newly discovered endpoints does succeed". It is three addresses in a
+CONNECT, not sixty-five dials, so the cost is bounded whether or not it
+lands.
+
+**If it does not land, the answer is a peer relay and not heimdall.**
+One of the user's own machines with a routable address, forwarding for
+two that cannot meet — Tailscale's `net/udprelay`, and the only relay
+shape the 7 Sep amendment permits, because the bytes never leave
+hardware the user owns. That is a step of its own, not a fallback bolted
+onto this one.
+
 ### Next session, in order
 
 Nothing here writes code until step 4 of this list. Everything above it
 is reading, and the reading is cheap compared with a second evening
 spent guessing at a network.
 
-1. **`net/netcheck` first.** `ratatoskr natcheck` called this carrier
+1. ~~**`net/netcheck` first.**~~ **Done, above.** `ratatoskr natcheck` called this carrier
    endpoint-independent and it is not; four reflectors asked inside one
    second agreed with each other and were all wrong about a fifth
    destination. Read what Tailscale's probe asks, how long it takes,
@@ -607,7 +806,7 @@ spent guessing at a network.
    measured here.** Until a classifier tells the truth about this
    network, nothing built on top of it can be trusted — and ours
    currently says the punch should work.
-2. **`net/portmapper`.** `libp2p.NATPortMap()` is enabled and achieved
+2. ~~**`net/portmapper`.**~~ **Done, above.** `libp2p.NATPortMap()` is enabled and achieved
    nothing: the router accepted `AddPortMapping` and could not name its
    own external address, because the carrier NAT sits above it. Read
    whether UPnP, NAT-PMP and PCP are all tried, what order, and what
@@ -615,7 +814,7 @@ spent guessing at a network.
    of why the home router's mapping is useless that is measured rather
    than assumed, and a statement of whether the phone side can ever be
    mapped.**
-3. **`wgengine/magicsock` and `disco`, together.** These are the design
+3. ~~**`wgengine/magicsock` and `disco`, together.**~~ **Done, above.** These are the design
    question: one socket, many candidate paths, continuous re-probing,
    and an upgrade from relayed to direct that happens later and by
    itself. Note especially how a path is *chosen* and how the upgrade
@@ -624,7 +823,7 @@ spent guessing at a network.
    replaces DCUtR. Read their hard-NAT handling here too, and write
    down the actual numbers — how many ports, how many sockets, for how
    long, and what they do when it fails.
-4. **Then decide, and write the decision down before building it.** The
+4. ~~**Then decide, and write the decision down before building it.**~~ **Done, above.** The
    choice is between two shapes and it should be made on paper. Either
    the punching moves below libp2p — a `quicreuse` socket that has
    already opened the path before QUIC is handed it, which

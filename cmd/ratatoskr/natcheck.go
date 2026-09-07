@@ -28,27 +28,71 @@ import (
 // the last two answers cannot be told apart.
 
 func natcheck() error {
-	got, c := stun.Reflect()
-	if c == nil {
-		return fmt.Errorf("cannot open a UDP socket")
+	servers := stun.Servers()
+	if len(servers) < 2 {
+		return fmt.Errorf("need at least two reflectors")
+	}
+	// The last reflector is held back. It is the only destination this
+	// socket will not have spoken to when the second round asks it, and
+	// a destination contacted for the first time is the only thing that
+	// can show an allocator that has moved.
+	held := servers[len(servers)-1]
+	first := servers[:len(servers)-1]
+
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		return fmt.Errorf("cannot open a UDP socket: %w", err)
 	}
 	defer c.Close()
 	local := c.LocalAddr().(*net.UDPAddr).Port
 	fmt.Printf("one socket, local port %d\n\n", local)
 
-	// One observer that is not a reflector, on the same socket.
+	// Round one: every observer inside a second, which is the test this
+	// command used to be.
 	//
-	// Three public reflectors agreeing is what this command used to
-	// call endpoint-independent mapping, and it was wrong on a carrier
-	// that gave the very next port to a fourth destination: the reply
-	// said hole punching can work, the punch published one port, the
-	// socket was behind another, and nothing arrived. The reflectors
-	// agreed with each other because they are alike — large providers
-	// reached the same way out of the carrier. A disagreement only
-	// appears when an observer that is not one of them is asked too,
-	// and the rendezvous is one this project already runs.
+	// A rendezvous that is not a reflector is asked too. Three public
+	// reflectors agreeing is what this command used to call
+	// endpoint-independent mapping, and it was wrong on a carrier that
+	// gave the very next port to a fourth destination: the reply said
+	// hole punching can work, the punch published one port, the socket
+	// was behind another, and nothing arrived. The reflectors agreed
+	// with each other because they are alike — large providers reached
+	// the same way out of the carrier.
+	fmt.Println("round one, all at once:")
+	var got []stun.Reflection
+	for _, s := range first {
+		got = append(got, stun.Ask(c, s))
+	}
 	got = append(got, askRendezvous(c))
+	report(got)
+	fmt.Println(verdict(got, local))
 
+	// Round two, later. Two questions that one round cannot separate.
+	//
+	// Re-asking a reflector from round one says whether a mapping this
+	// socket already holds survives. Asking the held-back reflector
+	// says what a destination contacted for the first time is given
+	// *now*. On this project's carrier the first answer holds and the
+	// second does not, and that pair is the whole of why a published
+	// address stops working: the mapping is minted when a destination
+	// is first spoken to, and the allocator has moved on since the
+	// address was published. A peer is always a first-time destination.
+	wait := config.Duration("RATATOSKR_NATCHECK_WAIT", 30*time.Second)
+	if wait <= 0 {
+		return nil
+	}
+	fmt.Printf("\nwaiting %s, then asking again...\n\n", wait)
+	time.Sleep(wait)
+
+	fmt.Printf("round two, %s later:\n", wait)
+	again := stun.Ask(c, first[0])
+	fresh := stun.Ask(c, held)
+	report([]stun.Reflection{again, fresh})
+	fmt.Println(drift(got, again, fresh))
+	return nil
+}
+
+func report(got []stun.Reflection) {
 	for _, r := range got {
 		if r.Err != nil {
 			fmt.Printf("  %-32s  unreachable: %v\n", r.Server, r.Err)
@@ -57,14 +101,42 @@ func natcheck() error {
 		fmt.Printf("  %-32s  seen as %s\n", r.Server, r.Mapped)
 	}
 	fmt.Println()
-	fmt.Println(verdict(got, local))
+}
 
-	// The address itself is not taken from here. A reflector names the
-	// socket that asked it, and a NAT that renumbers ports gives the
-	// socket libp2p punches from a different external port; the relay is
-	// asked for that one instead. What this command settles is whether
-	// any single address exists to be found at all.
-	return nil
+// drift compares the second round with the first and names the class
+// that a single round cannot see: a NAT whose existing mappings hold
+// while a destination met for the first time is given a different port.
+// No RFC 4787 term covers it, because RFC 4787 asks its questions at one
+// moment. It is the class that defeats every form of address
+// publication, since a peer is always a first-time destination and the
+// address reaches it later than it was measured.
+func drift(round1 []stun.Reflection, again, fresh stun.Reflection) string {
+	if again.Err != nil || fresh.Err != nil {
+		return "round two did not complete: the result is unknown, not good."
+	}
+	var was string
+	for _, r := range round1 {
+		if r.Err == nil && r.Server == again.Server {
+			was = r.Mapped
+		}
+	}
+	held := was == again.Mapped
+
+	switch {
+	case held && fresh.Mapped == again.Mapped:
+		return "The mapping held and a first-time destination was given the same port.\n" +
+			"An address measured now is still an address a peer may dial later. Hole punching can work."
+	case held:
+		return "The mapping held (" + again.Mapped + ") but a destination met for the first time was given " +
+			fresh.Mapped + ".\n" +
+			"This is the class that defeats publishing an address: the port is minted when a destination is\n" +
+			"first spoken to, and a peer is always a first-time destination reached later than the measurement.\n" +
+			"Publish one address and it will be wrong. Several observed addresses, refreshed while the agent\n" +
+			"runs, are the only thing that can be right."
+	default:
+		return "The mapping did not survive: " + again.Server + " saw " + was + " and now sees " + again.Mapped + ".\n" +
+			"Nothing this socket is seen as can be published, because it does not last long enough to be dialled."
+	}
 }
 
 // askRendezvous asks the pairing server what it sees, shaped as a
