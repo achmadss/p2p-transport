@@ -23,6 +23,21 @@ The key architectural requirement is:
 
 > **File data should travel directly between the user's devices whenever possible. A central server should only coordinate the connection and act as a fallback relay when a direct P2P connection cannot be established.**
 
+**Amended 7 Sep 2026, by the owner.** No user file data travels through
+the relay. Ever, and not as a fallback. The relay coordinates: presence,
+addresses, signalling, and the metadata that is measured in kilobytes.
+Bulk transfer is direct or it does not happen, and a peer that cannot be
+reached directly is reported as unreachable rather than served slowly at
+the owner's expense.
+
+This is stricter than the paragraph above and replaces the part of it
+that permits a fallback relay for file data. Step 3 is what forced the
+question: a phone on a mobile carrier reaching a laptop at home is the
+ordinary use of this product, and on the carrier measured it is exactly
+the case a fallback would capture — so the fallback would be the normal
+path, which the requirement in §6 already forbids. Section 6 is amended
+in the same way where it describes the fallback.
+
 Conceptually, this is similar to Tailscale, but specialized for **remote file management** rather than providing a general-purpose private network.
 
 ---
@@ -262,7 +277,21 @@ The important requirement is:
 
 > **The relay must not become the normal data path.**
 
-It should only be used when direct P2P connectivity is impossible.
+**Amended 7 Sep 2026, by the owner: the relay is not a data path at
+all.** It carries no user file data, including when direct connectivity
+is impossible. What it carries is coordination — presence, addresses,
+signalling, hole-punch arrangement — and nothing measured in megabytes.
+
+The listed cases above are therefore not a reason to relay bytes. They
+are the work: symmetric NAT is one of them, it is the case step 3
+measured, and the answer is to keep opening the path rather than to
+route around it at the operator's expense. When no direct path can be
+opened, a transfer fails and says so.
+
+The encryption below still holds for what the relay does carry, and the
+diagram stays because the property it describes — the relay cannot read
+what passes through it — remains a requirement of the coordination
+traffic.
 
 The relay should also ideally be unable to inspect file contents.
 

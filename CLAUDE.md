@@ -141,10 +141,14 @@ is a design change, not a refactor.
 - **`internal/fileapi` must not import libp2p.** The File API is the
   stable surface that WebDAV, the CLI, the control API and any future
   SFTP/FUSE adapter sit on. `PLAN.md` §8.
-- **No server on the data path.** Mimir and heimdall coordinate. Bytes go
-  peer to peer, or through the relay as ciphertext. Any design that
-  routes file content through a server you control is wrong here — that
-  includes server-side file managers like Filestash or File Browser.
+- **No server on the data path, and since 7 Sep 2026 no relayed file
+  bytes either.** Mimir and heimdall coordinate: presence, addresses,
+  signalling, metadata in kilobytes. File data goes peer to peer or it
+  does not go — a peer with no direct path is reported unreachable, not
+  served through the relay. `SPEC.md` §24 and §6 carry the amendment.
+  Any design that routes file content through a server you control is
+  wrong here, and that now includes the relay as well as server-side
+  file managers like Filestash or File Browser.
 - **Every filesystem call goes through `internal/fsroot`.** Clean, join to
   the root, `EvalSymlinks`, then verify the **resolved** path is still
   inside the root. Writes are different: the target does not exist yet, so

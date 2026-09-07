@@ -532,12 +532,12 @@ socket, and a connection punched outside it cannot be handed back.
 
 **Step 3 stays open, and "use the relay" is not the answer.** A phone
 on a public network reaching a laptop at home is the ordinary way this
-product will be used, not an edge case. `SPEC.md` §24 does allow a
-fallback relay, and §263 says in the same breath that it must not
-become the normal data path; on this carrier it would be exactly that.
-The owner's constraint is stricter still — no egress billed to this
-VPS at all — so the measurements above are the problem statement
-rather than the conclusion.
+product will be used, not an edge case. `SPEC.md` was amended on
+7 Sep 2026 to match: the relay carries no user file data at all, not
+even as a fallback, so a peer with no direct path is reported
+unreachable rather than served slowly. That removes the escape hatch
+this step was about to use, deliberately. The measurements above are
+the problem statement, not the conclusion.
 
 ### What to read next: Tailscale
 
@@ -591,6 +591,59 @@ real IPv6 have no NAT between them at all. The hotspot has a
 `2404:c0::/32` address and the home line has none, which is a question
 for an ISP rather than for this repo, and it would remove the problem
 on that pair entirely.
+
+### Next session, in order
+
+Nothing here writes code until step 4 of this list. Everything above it
+is reading, and the reading is cheap compared with a second evening
+spent guessing at a network.
+
+1. **`net/netcheck` first.** `ratatoskr natcheck` called this carrier
+   endpoint-independent and it is not; four reflectors asked inside one
+   second agreed with each other and were all wrong about a fifth
+   destination. Read what Tailscale's probe asks, how long it takes,
+   and what it names this class. **Pass/fail: run their probe or
+   reimplement its question, and get a verdict that matches what was
+   measured here.** Until a classifier tells the truth about this
+   network, nothing built on top of it can be trusted — and ours
+   currently says the punch should work.
+2. **`net/portmapper`.** `libp2p.NATPortMap()` is enabled and achieved
+   nothing: the router accepted `AddPortMapping` and could not name its
+   own external address, because the carrier NAT sits above it. Read
+   whether UPnP, NAT-PMP and PCP are all tried, what order, and what
+   they do when the answer is that shape. **Pass/fail: an explanation
+   of why the home router's mapping is useless that is measured rather
+   than assumed, and a statement of whether the phone side can ever be
+   mapped.**
+3. **`wgengine/magicsock` and `disco`, together.** These are the design
+   question: one socket, many candidate paths, continuous re-probing,
+   and an upgrade from relayed to direct that happens later and by
+   itself. Note especially how a path is *chosen* and how the upgrade
+   is *noticed*, because `connect` already serves over the relay and
+   upgrades in the background and that behaviour must survive whatever
+   replaces DCUtR. Read their hard-NAT handling here too, and write
+   down the actual numbers — how many ports, how many sockets, for how
+   long, and what they do when it fails.
+4. **Then decide, and write the decision down before building it.** The
+   choice is between two shapes and it should be made on paper. Either
+   the punching moves below libp2p — a `quicreuse` socket that has
+   already opened the path before QUIC is handed it, which
+   `internal/transport/selfaddr.go` proves is reachable — or this
+   project dials a peer without DCUtR's help at all. Both are large.
+   The first keeps libp2p's identity, streams and relay for
+   coordination; the second does not. Do not start typing until this
+   paragraph has an answer in it.
+5. **Only then, the spike.** Whatever is chosen, it gets measured on
+   the same two machines before it is believed: home Wi-Fi to phone
+   hotspot, agent at least three minutes old, and the line to look for
+   is still `upgraded to direct`. The three-minute wait is not
+   ceremony — every idea so far has passed at zero minutes and failed
+   at three.
+
+Two things to carry into it. `RATATOSKR_NO_MDNS=1` is needed on the
+hotspot Mac or the agent takes every terminal window down with it. And
+`scripts/punchpair.sh` measures the network without libp2p in the way,
+which is the control any new punching code needs beside it.
 
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
