@@ -79,9 +79,11 @@ sixty-six have all failed. The requirement is no file bytes through the
 VPS — no egress, not a little — so "fall back to the relay" is not an
 answer here. `TODO.md` step 3 carries the numbers and the plan, which
 is to read Tailscale's `net/portmapper`, `net/netcheck`,
-`wgengine/magicsock` and `disco` and take what applies. Do not adopt
-DERP; carrying data through a relay is the one thing this project
-refuses.
+`wgengine/magicsock` and `disco` and take what applies. It is cloned at
+`/Users/achmad/Documents/Belajar/tailscale` — a sibling to read, not a
+dependency; nothing here imports it and `CGO_ENABLED=0` and the
+package layout in `PLAN.md` §17 still bind. Read `derp` to understand
+the fallback they chose and do not adopt it.
 
 Four traps this step exposed. libp2p marks a relayed connection
 *limited* and refuses streams on it unless the dial passes

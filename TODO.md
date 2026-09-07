@@ -542,12 +542,10 @@ rather than the conclusion.
 ### What to read next: Tailscale
 
 Tailscale solves this case in production, on the same carriers, and
-its source is open. Clone it beside this repo and read it before
-writing anything:
-
-```
-git clone --depth 1 https://github.com/tailscale/tailscale
-```
+its source is open. It is cloned at
+`/Users/achmad/Documents/Belajar/tailscale`, at `v1.103.0-pre`
+(`5201273ae`) — a sibling of this repo, not a dependency of it, and
+nothing here imports it.
 
 Read to answer specific questions, not for inspiration. Each one is
 something measured above that we could not get past.
