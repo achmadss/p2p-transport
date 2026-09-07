@@ -91,8 +91,9 @@ choice. Do it before anything depends on the answer.
       and how long the upgrade took
 - [x] **Measure and write down**: hole punch success rate, time to punch,
       and MB/s on a 1 Gbps LAN and over the Internet
-- [ ] Test: home Wi-Fi to phone hotspot; macOS↔Windows↔Linux; both peers
-      behind the same NAT
+- [x] Test: home Wi-Fi to phone hotspot — upgraded to direct in 251 ms
+      once the advertised address spans the carrier's port creep
+- [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
       how a torrent client stays off relays. Kept even though this house
@@ -412,6 +413,24 @@ minute, that DCUtR could not open. It is a hypothesis with a mechanism
 behind it now rather than a guess, and the way to test it is to
 measure what port an agent's socket really uses toward a peer versus
 what its relay observed.
+
+**Confirmed 7 Sep 2026, and step 3's hole punch now passes.** Two Macs,
+one on home Wi-Fi and one on the phone hotspot, dialled twice in the
+same minute with one variable between the runs.
+
+| Serve side advertises | Result |
+|---|---|
+| `/ip4/182.6.166.95/udp/63189/quic-v1` | still relayed after 1m0s, three attempts, three timeouts |
+| the same address and the two ports above it | **upgraded to direct after 251 ms** |
+
+So DCUtR was never failing. It was dialling a port the carrier had
+already moved off, and it had exactly one candidate to be wrong about.
+Given three, it punched on the first attempt. `RATATOSKR_ADDR_SPREAD`
+is off by default and this is what it is for.
+
+The `+1` held again here: the relay observed 63189 in one run and
+35629 in the next, and the ports advertised around it are what carried
+the connection.
 
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero
