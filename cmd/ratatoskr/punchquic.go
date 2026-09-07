@@ -114,6 +114,13 @@ func punchQUIC(role string) error {
 	//
 	// QUIC drops the junk as unparseable, which is the point — it opens
 	// the hole without pretending to be a handshake.
+	//
+	// It spreads over the same ports as the bare punch, or the two
+	// phases would not be comparable. With the window set to zero the
+	// bare punch does not run at all, and if only it could aim at the
+	// carrier's real port then a failure here would have two causes at
+	// once — QUIC went first, and QUIC went somewhere nobody is. Those
+	// are the two things this run exists to separate.
 	stop := make(chan struct{})
 	go func() {
 		junk := make([]byte, 64)
@@ -123,8 +130,12 @@ func punchQUIC(role string) error {
 				return
 			default:
 			}
-			rand.Read(junk)
-			tr.WriteTo(junk, peer)
+			for off := 0; off <= punchSpread(); off++ {
+				to := *peer
+				to.Port = peer.Port + off
+				rand.Read(junk)
+				tr.WriteTo(junk, &to)
+			}
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
@@ -139,10 +150,11 @@ func punchQUIC(role string) error {
 		close(stop)
 		fmt.Printf("  no QUIC connection: %v\n\n", err)
 		if raw < 0 {
-			fmt.Println("QUIC went first and got nowhere. Run it again with the bare punch")
-			fmt.Println("in front: if that succeeds, the path only opens for a flow that")
-			fmt.Println("does not begin with a QUIC handshake, and the agent must open it")
-			fmt.Println("the same way before DCUtR dials.")
+			fmt.Println("QUIC went first and got nowhere, aiming at the same ports the")
+			fmt.Println("bare punch opens. So the port is not the difference and the")
+			fmt.Println("payload is: this path opens for plain datagrams and not for a")
+			fmt.Println("flow that begins with a QUIC handshake, and the agent must open")
+			fmt.Println("it the same way before DCUtR dials.")
 		} else if raw > 0 {
 			fmt.Println("Bare packets crossed this path seconds ago and a handshake could")
 			fmt.Println("not. The path passes datagrams but not QUIC, and no library or")
@@ -160,6 +172,13 @@ func punchQUIC(role string) error {
 	fmt.Println("problem, and neither is quic-go: whatever fails in `connect` fails")
 	fmt.Println("above them both.")
 	return nil
+}
+
+// punchSpread is how many ports above the published one to write to.
+// Both phases read it, because a control that aims differently from the
+// thing it controls for is not a control.
+func punchSpread() int {
+	return config.Int("RATATOSKR_PUNCH_SPREAD", 0)
 }
 
 // bareWindow reads how long to punch with bare packets.
@@ -231,7 +250,7 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 	// Off by default: on a NAT that keeps one port this is a dozen
 	// pointless packets, and the number that matters is measured before
 	// it is worked around.
-	spread := config.Int("RATATOSKR_PUNCH_SPREAD", 0)
+	spread := punchSpread()
 	if spread > 0 {
 		fmt.Printf("  spreading over ports %d-%d, because one of them is the real one.\n",
 			peer.Port, peer.Port+spread)
