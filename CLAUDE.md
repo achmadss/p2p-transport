@@ -23,7 +23,13 @@ product and its agent binary are both called Ratatoskr:
 - **`PLAN.md`** — the design that satisfies the spec. Numbered sections;
   cite them (`PLAN.md §11`) rather than restating them.
 - **`TODO.md`** — the ordered work, step 0 to step 14, each with a
-  concrete pass/fail check.
+  concrete pass/fail check. Steps, not findings: what was measured on
+  the way lives beside it.
+- **`NAT.md`** — the step 3 notebook: every measurement taken while
+  finding out whether two machines can reach each other directly, and
+  the three readings that turned out to be wrong on the way. Read it
+  before proposing anything about hole punching; it is where the ideas
+  that already failed are recorded.
 
 ## Current state
 
