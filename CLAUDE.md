@@ -145,6 +145,16 @@ explicit package list instead. The discovery tests cannot simply be run
 with the variable set — they need the socket they would be denied — so
 on this machine they do not get run at all.
 
+**And the variable is not sufficient.** A loopback run of heimdall and
+two agents took the terminal down with `RATATOSKR_NO_MDNS=1` exported
+before any of them started, and heimdall does not import
+`internal/discovery` at all — so multicast was not the trigger that
+time and the filter reacts to something else these processes do. On this
+machine an agent is therefore started by the person at the keyboard,
+never by an agent working on the repo: build, vet and the test list are
+safe, and `run`, `bench`, `connect` and everything in `scripts/` are
+not.
+
 ```bash
 make build                      # -> dist/ratatoskr
 make vet

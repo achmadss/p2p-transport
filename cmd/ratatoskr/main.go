@@ -459,6 +459,35 @@ func bench(want, path string, mb int64) error {
 			mb, human(relayCap))
 	}
 
+	if err := transfer(s, mb, total, first); err != nil {
+		return err
+	}
+	if first != transport.PathRelay {
+		return nil
+	}
+
+	// A stream lives on the connection it was opened on, so the transfer
+	// above stayed on the relay even if the punch landed halfway through
+	// it. The number that answers "is the relay the normal data path"
+	// therefore comes from a second stream, opened after the upgrade —
+	// which is exactly what the File API will do for the next request on
+	// a session that has been up a while.
+	upgraded := watchUpgrade(h, peerID)
+	if upgraded != transport.PathDirect && upgraded != transport.PathLAN {
+		return nil
+	}
+	s2, err := h.Open(ctx, peerID, transport.BenchProto)
+	if err != nil {
+		return fmt.Errorf("second pass: %w", err)
+	}
+	defer s2.Close()
+	again := transport.Describe(s2.Conn()).Path
+	fmt.Printf("second pass over %s\n", again)
+	return transfer(s2, mb, total, again)
+}
+
+// transfer sends the bytes and reports the rate the far end confirms.
+func transfer(s network.Stream, mb, total int64, path transport.Path) error {
 	start := time.Now()
 	if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, total); err != nil {
 		return fmt.Errorf("send: %w", err)
@@ -480,12 +509,8 @@ func bench(want, path string, mb int64) error {
 		return fmt.Errorf("sent %d bytes, far end received %d", total, got)
 	}
 
-	fmt.Printf("%d MB in %s = %.1f MB/s\n", mb, elapsed.Round(time.Millisecond),
+	fmt.Printf("%d MB over %s in %s = %.1f MB/s\n", mb, path, elapsed.Round(time.Millisecond),
 		float64(total)/(1<<20)/elapsed.Seconds())
-
-	if first == transport.PathRelay {
-		watchUpgrade(h, peerID)
-	}
 	return nil
 }
 
@@ -496,7 +521,7 @@ func bench(want, path string, mb int64) error {
 // It watches rather than acts: the punching is the transport's, it runs
 // on both ends for as long as the peer is relayed, and it would go on
 // whether or not anybody was measuring it.
-func watchUpgrade(h *transport.Host, id peer.ID) {
+func watchUpgrade(h *transport.Host, id peer.ID) transport.Path {
 	start := time.Now()
 	deadline := time.After(punchWindow)
 	tick := time.NewTicker(250 * time.Millisecond)
@@ -509,11 +534,11 @@ func watchUpgrade(h *transport.Host, id peer.ID) {
 			// the upgrade is outstanding, and it keeps being retried
 			// for as long as the session lasts.
 			fmt.Printf("still relayed after %s; the transfer worked, the direct path has not opened yet\n", punchWindow)
-			return
+			return transport.PathRelay
 		case <-tick.C:
 			if p := h.PathTo(id); p == transport.PathDirect || p == transport.PathLAN {
 				fmt.Printf("upgraded to %s after %s\n", p, time.Since(start).Round(time.Millisecond))
-				return
+				return p
 			}
 		}
 	}

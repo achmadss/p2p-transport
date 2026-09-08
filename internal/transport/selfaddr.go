@@ -116,15 +116,19 @@ func (s *selfAddr) Addrs(within time.Duration) []string {
 		s.cacheMu.Unlock()
 	}
 	if os.Getenv("RATATOSKR_DIAG") != "" {
-		// The counts, not just the addresses. A set of one means the
-		// reflectors agreed or it means seven of them never answered,
-		// and those are opposite networks reading the same on one line.
-		var say []string
+		// Answers and distinct addresses are different counts, and
+		// confusing them inverts the finding: one address seen seven
+		// times is a carrier that gives every observer the same door,
+		// and seven addresses seen once each is a carrier that gives
+		// each one its own. Both used to print as "1 of 8".
+		answers := 0
+		say := make([]string, 0, len(order))
 		for _, a := range order {
+			answers += seen[a]
 			say = append(say, fmt.Sprintf("%s x%d", a, seen[a]))
 		}
-		fmt.Fprintf(os.Stderr, "punch addresses measured now (%d of %d reflectors answered): %s\n",
-			len(say), len(servers), strings.Join(say, ", "))
+		fmt.Fprintf(os.Stderr, "punch addresses: %d of %d reflectors answered, %d distinct: %s\n",
+			answers, len(servers), len(order), strings.Join(say, ", "))
 	}
 	return out
 }

@@ -562,6 +562,21 @@ func directOnly(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 	return out
 }
 
+// Open starts a stream on a connection that already exists.
+//
+// The path is whatever the connection manager considers best right now,
+// which after an upgrade is the direct connection rather than the relay
+// the session started on. That is the whole benefit of upgrading: a
+// stream opened later takes the better path without anything switching
+// over, and a stream opened earlier stays where it was born.
+func (t *Host) Open(ctx context.Context, id peer.ID, p protocol.ID) (network.Stream, error) {
+	s, err := t.h.NewStream(network.WithAllowLimitedConn(ctx, "ratatoskr"), id, p)
+	if err != nil {
+		return nil, fmt.Errorf("open stream: %w", err)
+	}
+	return s, nil
+}
+
 // DialRelayed reaches a peer through a relay. The caller has chosen to
 // leave the local network, so circuit addresses are kept.
 func (t *Host) DialRelayed(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
