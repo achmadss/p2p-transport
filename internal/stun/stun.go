@@ -1,16 +1,19 @@
 // Package stun asks a public reflector what address the world sees this
 // socket as.
 //
-// It answers one question and not the other. Asked from several
-// reflectors on one socket, it classifies the NAT's mapping behaviour
-// (RFC 4787), which decides whether a hole punch can work here at all.
-// It cannot supply the address to advertise: the port it reports belongs
-// to the socket that asked, and a NAT that renumbers ports gives the
-// socket libp2p punches from a different one. That address is asked of
-// the relay instead; see transport.ObservedProto.
+// It answers two questions. Asked from several reflectors on one socket,
+// it classifies the NAT's mapping behaviour (RFC 4787), which decides
+// whether a hole punch can work here at all; that is `ratatoskr
+// natcheck` and `punch-quic`, both diagnostics.
 //
-// Its callers are therefore `ratatoskr natcheck` and `punchtest`, both
-// diagnostics.
+// It also supplies the addresses to advertise, but only when asked
+// through the socket that will do the punching. The port a reflector
+// reports belongs to the socket that asked, so a throwaway socket
+// learns nothing about libp2p's — which is why transport/selfaddr.go
+// wraps quic-go's own socket before asking, and why asking the relay
+// over transport.ObservedProto is the other half rather than the
+// answer: the relay names a door opened at startup, and this names one
+// opened now.
 package stun
 
 import (

@@ -182,9 +182,16 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	}
 	HandleObserved(h)
 	t := &Host{h: h, done: make(chan struct{})}
-	go holdRelays(h, infos, &observed)
-	go t.refreshMeasured(mine, &measured)
 	t.watchForRelayed()
+	// Both of these exist to get off a relay, so neither runs without
+	// one. A LAN-only agent has no peer that could be told a public
+	// address and no relayed connection to escape, and asking eight
+	// reflectors every 27 seconds for the life of an idle laptop is
+	// traffic nobody asked for.
+	if len(infos) > 0 {
+		go holdRelays(h, infos, &observed)
+		go t.refreshMeasured(mine, &measured)
+	}
 	return t, nil
 }
 

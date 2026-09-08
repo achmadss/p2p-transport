@@ -60,11 +60,11 @@ load-bearing, not tidiness: a peer found on the LAN must be reached on
 the LAN or not at all.
 
 **TODO step 3 is open, and it is the step that matters.** `cmd/heimdall`
-is a circuit relay v2 node on a real VPS. The agent enables AutoNAT,
-DCUtR and the relay client when `config.json` names a relay, and
-`connect --via lan|relay|auto` picks a path — `auto` gives the LAN a
-400 ms head start, per `PLAN.md` §6. LAN and relay are measured: 65
-MB/s over Wi-Fi, 3.7 MB/s relayed.
+is a circuit relay v2 node on a real VPS. The agent always enables
+AutoNAT and DCUtR, and adds the relay client and a forced reservation
+when `config.json` names a relay; `connect --via lan|relay|auto` picks
+a path, and `auto` gives the LAN a 400 ms head start, per `PLAN.md` §6.
+LAN and relay are measured: 65 MB/s over Wi-Fi, 3.7 MB/s relayed.
 
 **What is not solved is a *direct* path from a phone on a public network
 to a laptop at home, and that is the ordinary case rather than an edge
