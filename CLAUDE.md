@@ -105,7 +105,7 @@ prints the peer id to copy rather than an address it cannot promise.
 And one machine takes every terminal window down the moment the agent
 opens a multicast socket — a content filter below the socket fails
 every packet to 224.0.0.251 — so `RATATOSKR_NO_MDNS` exists to run the
-agent without one.
+agent without one. It is not optional on that machine; see **Commands**.
 
 A machine learns its public address two ways, and the difference is the
 whole of step 3. Asking a relay over `/ratatoskr/observed/1.0.0` names
@@ -128,15 +128,35 @@ Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands
 
+**`RATATOSKR_NO_MDNS=1` goes in the environment of every binary this
+repo builds and every script in `scripts/`, without exception and
+whichever one it is.** Not just `ratatoskr` and `heimdall`, and not just
+the subcommands that obviously serve: anything that might start an agent
+counts, and a binary added later counts before anyone has checked what
+it opens. On this machine a content filter below the socket fails every
+packet to 224.0.0.251, so the moment a process opens a multicast socket
+it takes every terminal window on the machine down with it — the session
+running the command included. Put the variable on the command itself
+rather than in a parent shell that a later command may not inherit.
+
+That extends to the tests, because `internal/discovery` opens a real
+one. `make test` and `go test ./...` are therefore unsafe here; run an
+explicit package list instead. The discovery tests cannot simply be run
+with the variable set — they need the socket they would be denied — so
+on this machine they do not get run at all.
+
 ```bash
-make build          # -> dist/ratatoskr
-make test           # go test ./...
+make build                      # -> dist/ratatoskr
 make vet
-make cross          # all five targets from one machine
+make cross                      # all five targets from one machine
 make clean
 
-go test ./internal/fsroot/ -run TestSymlinkEscape -v   # one test
-go test ./... -race
+# tests, without internal/discovery
+RATATOSKR_NO_MDNS=1 go test ./internal/transport/ ./internal/config/ \
+    ./internal/identity/ ./cmd/... -count=1
+
+RATATOSKR_NO_MDNS=1 go test ./internal/fsroot/ -run TestSymlinkEscape -v
+RATATOSKR_NO_MDNS=1 dist/ratatoskr run
 ```
 
 ## Constraints that are not negotiable
