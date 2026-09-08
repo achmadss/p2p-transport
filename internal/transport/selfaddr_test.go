@@ -96,3 +96,57 @@ func TestFixtureParsesWithTheRealParser(t *testing.T) {
 		t.Fatalf("parser read %q from the fixture", got)
 	}
 }
+
+// TestKeepCorroborated pins the rule that decides what gets published.
+// Two reflectors agreeing on a port is evidence of a door; one reflector
+// alone is a door minted for that reflector, and publishing it costs
+// every peer a dial into nothing. The first answer is kept regardless,
+// or an ordinary NAT whose reflectors happen to disagree would advertise
+// no address at all.
+func TestKeepCorroborated(t *testing.T) {
+	cases := []struct {
+		name  string
+		order []string
+		seen  map[string]int
+		want  []string
+	}{
+		{
+			name:  "one port, everyone agrees",
+			order: []string{"203.0.113.9:4242"},
+			seen:  map[string]int{"203.0.113.9:4242": 8},
+			want:  []string{"203.0.113.9:4242"},
+		},
+		{
+			name:  "a second door, seen twice, is offered too",
+			order: []string{"203.0.113.9:4242", "203.0.113.9:5555"},
+			seen:  map[string]int{"203.0.113.9:4242": 5, "203.0.113.9:5555": 2},
+			want:  []string{"203.0.113.9:4242", "203.0.113.9:5555"},
+		},
+		{
+			name:  "a port only one reflector saw is noise",
+			order: []string{"203.0.113.9:4242", "203.0.113.9:6001"},
+			seen:  map[string]int{"203.0.113.9:4242": 4, "203.0.113.9:6001": 1},
+			want:  []string{"203.0.113.9:4242"},
+		},
+		{
+			name:  "the symmetric carrier: every answer differs, the first still stands",
+			order: []string{"203.0.113.9:1", "203.0.113.9:2", "203.0.113.9:3"},
+			seen:  map[string]int{"203.0.113.9:1": 1, "203.0.113.9:2": 1, "203.0.113.9:3": 1},
+			want:  []string{"203.0.113.9:1"},
+		},
+		{name: "nobody answered", order: nil, seen: map[string]int{}, want: nil},
+	}
+	for _, c := range cases {
+		got := keepCorroborated(c.order, c.seen)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}

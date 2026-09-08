@@ -15,7 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -83,6 +83,18 @@ var listenAddrs = []string{
 // serves and consumes, so there is no separate client type.
 type Host struct {
 	h host.Host
+
+	// done stops the background work — measuring this machine's public
+	// addresses, and retrying the punch on a relayed peer — when the
+	// host closes. Without it every test that starts a host leaves two
+	// goroutines asking reflectors for the life of the run.
+	done      chan struct{}
+	closeOnce sync.Once
+
+	// upgrading names the peers a punch loop is already running for, so
+	// that a second relayed connection to the same peer does not start
+	// a second one.
+	upgrading sync.Map // peer.ID -> struct{}
 }
 
 // New starts a host under the given identity.
@@ -124,23 +136,25 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// punching opens — the phone dials out, the house listens.
 		libp2p.NATPortMap(),
 	}
-	// The address a reflector sees us at, once one has been asked and
-	// believed. Empty until then, and empty forever on a NAT that will
-	// not answer for it; see internal/stun.
-	var public atomic.Value
+	// Where the world says this machine is, from two observers that fail
+	// in different ways. `observed` is what a relay saw when the agent
+	// connected to it, which is right on a NAT that keeps its mappings
+	// and stale within minutes on one that does not. `measured` is what
+	// several reflectors see on libp2p's own socket right now, refreshed
+	// on the endpointsFresh clock. Both are empty until something
+	// answers, and on a NAT that will answer for neither they stay
+	// empty rather than publishing a guess.
+	var observed, measured atomic.Value
 	opts = append(opts, libp2p.AddrsFactory(func(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-		a, ok := public.Load().(multiaddr.Multiaddr)
-		if !ok {
-			return as
-		}
-		for _, have := range as {
-			if have.Equal(a) {
-				return as
+		out := append(as[:0:0], as...)
+		for _, extra := range [][]multiaddr.Multiaddr{known(&observed), known(&measured)} {
+			for _, a := range extra {
+				if !has(out, a) {
+					out = append(out, a)
+				}
 			}
 		}
-		out := make([]multiaddr.Multiaddr, len(as), len(as)+1)
-		copy(out, as)
-		return append(out, a)
+		return out
 	}))
 
 	if len(infos) > 0 {
@@ -167,8 +181,49 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
 	HandleObserved(h)
-	go holdRelays(h, infos, &public)
-	return &Host{h: h}, nil
+	t := &Host{h: h, done: make(chan struct{})}
+	go holdRelays(h, infos, &observed)
+	go t.refreshMeasured(mine, &measured)
+	t.watchForRelayed()
+	return t, nil
+}
+
+// known reads one of the address stores. Nothing is published before
+// the first answer lands, which is the honest state and not a failure.
+func known(v *atomic.Value) []multiaddr.Multiaddr {
+	as, _ := v.Load().([]multiaddr.Multiaddr)
+	return as
+}
+
+// refreshMeasured keeps this machine's public address set younger than
+// a NAT mapping's life.
+//
+// This is the half of Tailscale's answer that lives outside the punch.
+// Their endpoints are re-measured before every signalling round rather
+// than once at startup, because a set measured at startup describes a
+// door the carrier has since moved. Ours is published through the
+// AddrsFactory above, which means identify pushes it to every connected
+// peer as it changes — so a peer that is about to punch is told where
+// to aim by the ordinary machinery, with nothing new on the wire.
+func (t *Host) refreshMeasured(mine *socketRef, measured *atomic.Value) {
+	for {
+		var out []multiaddr.Multiaddr
+		for _, a := range mine.Addrs(2 * time.Second) {
+			for _, ma := range quicAddrs(a, nextDoors) {
+				if !has(out, ma) {
+					out = append(out, ma)
+				}
+			}
+		}
+		if len(out) > 0 {
+			measured.Store(out)
+		}
+		select {
+		case <-t.done:
+			return
+		case <-time.After(endpointsFresh):
+		}
+	}
 }
 
 // holdRelays dials every configured relay at startup and asks each one
@@ -186,7 +241,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 // reason to run LAN-only rather than a reason not to start. A machine
 // that changes network keeps the old address until it restarts.
 // ponytail: re-ask on EvtLocalAddressesUpdated when roaming matters.
-func holdRelays(h host.Host, relays []peer.AddrInfo, public *atomic.Value) {
+func holdRelays(h host.Host, relays []peer.AddrInfo, observed *atomic.Value) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, r := range relays {
@@ -195,7 +250,7 @@ func holdRelays(h host.Host, relays []peer.AddrInfo, public *atomic.Value) {
 			continue
 		}
 		if a, ok := askObserved(ctx, h, r.ID); ok {
-			public.Store(a)
+			observed.Store([]multiaddr.Multiaddr{a})
 		}
 	}
 }
@@ -271,15 +326,19 @@ func (f punchFilter) FilterLocal(_ peer.ID, as []multiaddr.Multiaddr) []multiadd
 	}
 	// Two seconds is the whole budget: DCUtR is on a clock, and a
 	// reflector that has not answered by then would arrive too late to
-	// be true anyway.
-	mapped := f.now.Where(2 * time.Second)
-	if mapped == "" {
+	// be true anyway. In practice this costs nothing, because the
+	// refresher has already measured within endpointsFresh and this
+	// reads its cache.
+	mapped := f.now.Addrs(2 * time.Second)
+	if len(mapped) == 0 {
 		return as
 	}
 	out := append(as[:0:0], as...)
-	for _, fresh := range quicAddrs(mapped, nextDoors) {
-		if !has(out, fresh) {
-			out = append(out, fresh)
+	for _, m := range mapped {
+		for _, fresh := range quicAddrs(m, nextDoors) {
+			if !has(out, fresh) {
+				out = append(out, fresh)
+			}
 		}
 	}
 	return out
@@ -474,17 +533,26 @@ func (t *Host) Dial(ctx context.Context, addr string, p protocol.ID) (network.St
 // silently relaying through heimdall would send bytes off a network the
 // user believed they never left. PLAN.md §6.
 func (t *Host) DialPeer(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
-	direct := info.Addrs[:0:0]
-	for _, a := range info.Addrs {
-		if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err != nil {
-			direct = append(direct, a)
-		}
-	}
+	direct := directOnly(info.Addrs)
 	if len(direct) == 0 {
 		return nil, fmt.Errorf("no direct address for %s", info.ID)
 	}
 	info.Addrs = direct
 	return t.dial(ctx, info, p)
+}
+
+// directOnly drops circuit addresses. Two callers want this and want it
+// for the same reason: an address that goes through a relay is not a
+// direct path, whether it is being refused (DialPeer) or dialled past
+// (dialDirect).
+func directOnly(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	out := as[:0:0]
+	for _, a := range as {
+		if _, err := a.ValueForProtocol(multiaddr.P_CIRCUIT); err != nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // DialRelayed reaches a peer through a relay. The caller has chosen to
@@ -527,7 +595,10 @@ func (t *Host) PathTo(id peer.ID) Path {
 
 func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 
-func (t *Host) Close() error { return t.h.Close() }
+func (t *Host) Close() error {
+	t.closeOnce.Do(func() { close(t.done) })
+	return t.h.Close()
+}
 
 // Conn describes one live connection, as measured.
 type Conn struct {

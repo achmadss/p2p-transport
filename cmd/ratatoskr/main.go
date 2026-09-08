@@ -35,14 +35,18 @@ const version = "0.0.1"
 //	dialTimeout   the whole attempt. A relayed dial has a reservation
 //	              and a hole punch to get through first.
 //	benchTimeout  a whole measurement, which moves real bytes.
-//	punchWindow   how long a relayed connection is watched for a DCUtR
-//	              upgrade before the punch is called a failure.
+//	punchWindow   how long a relayed connection is watched for an
+//	              upgrade to a direct one before the punch is called a
+//	              failure. Longer than it looks it needs to be: the
+//	              address set a punch aims at is re-measured every 27
+//	              seconds, so a window shorter than that reports a
+//	              failure the retry would have fixed.
 var (
 	lanTimeout   = config.Duration("RATATOSKR_LAN_TIMEOUT", 3*time.Second)
 	lanHeadStart = config.Duration("RATATOSKR_LAN_HEAD_START", 400*time.Millisecond)
 	dialTimeout  = config.Duration("RATATOSKR_DIAL_TIMEOUT", 30*time.Second)
 	benchTimeout = config.Duration("RATATOSKR_BENCH_TIMEOUT", 10*time.Minute)
-	punchWindow  = config.Duration("RATATOSKR_PUNCH_WINDOW", 30*time.Second)
+	punchWindow  = config.Duration("RATATOSKR_PUNCH_WINDOW", 90*time.Second)
 
 	// A relayed byte crosses the relay's host twice, in and out, and
 	// TODO.md step 3 measured a network where no direct path is ever
@@ -129,7 +133,9 @@ environment (empty means the default):
   RATATOSKR_LAN_HEAD_START  --via auto's LAN head start          (400ms)
   RATATOSKR_DIAL_TIMEOUT    whole connect attempt                (30s)
   RATATOSKR_BENCH_TIMEOUT   whole benchmark                      (10m)
-  RATATOSKR_PUNCH_WINDOW    wait for a hole punch                (30s)
+  RATATOSKR_PUNCH_WINDOW    wait for a hole punch                (90s)
+  RATATOSKR_UPGRADE_EVERY   retry the punch on a relayed peer      (5s)
+  RATATOSKR_UPGRADE_DIAL    how long one retry may take            (5s)
   RATATOSKR_BENCH_MB        default benchmark size               (100)
   RATATOSKR_RELAY_CAP       bytes one relayed transfer may move,
                             K/M/G suffixes. 0 means no cap.        (0)
@@ -481,9 +487,13 @@ func bench(want, path string, mb int64) error {
 	return nil
 }
 
-// watchUpgrade waits to see whether DCUtR turns the relayed connection
-// into a direct one, and how long it takes. A punch that never lands is
-// as much a result as one that does.
+// watchUpgrade waits to see whether the relayed connection becomes a
+// direct one, and how long it takes. A punch that never lands is as much
+// a result as one that does.
+//
+// It watches rather than acts: the punching is the transport's, it runs
+// on both ends for as long as the peer is relayed, and it would go on
+// whether or not anybody was measuring it.
 func watchUpgrade(h *transport.Host, id peer.ID) {
 	start := time.Now()
 	deadline := time.After(punchWindow)
@@ -493,7 +503,7 @@ func watchUpgrade(h *transport.Host, id peer.ID) {
 	for {
 		select {
 		case <-deadline:
-			fmt.Printf("still relayed after %s: no hole punch\n", punchWindow)
+			fmt.Printf("still relayed after %s: no direct path yet\n", punchWindow)
 			return
 		case <-tick.C:
 			if p := h.PathTo(id); p == transport.PathDirect || p == transport.PathLAN {

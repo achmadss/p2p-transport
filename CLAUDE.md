@@ -75,15 +75,20 @@ carrier tested gives every new destination an unrelated port, so no
 address a third party observes names the door a peer must dial. A
 punch lands in 251 ms when the agent is seconds old and never once it
 is minutes old; a measured address, a span of five and a span of
-sixty-six have all failed. The requirement is no file bytes through the
-VPS — no egress, not a little — so "fall back to the relay" is not an
-answer here. `TODO.md` step 3 carries the numbers and the plan. Tailscale's
+sixty-six have all failed. Relaying is a fallback the spec allows, but
+`SPEC.md` §6 forbids it becoming the normal data path and on this
+carrier it would be exactly that, so the punch still has to land.
+`TODO.md` step 3 carries the numbers and the plan. Tailscale's
 `net/portmapper`, `net/netcheck`, `wgengine/magicsock` and `disco` have
-now been read, and the decision is written down there: keep DCUtR and
-hand it a *set* of independently measured addresses refreshed every 27
-seconds, rather than the one stale address it has been given all along.
-Port mapping is closed on both ends and the birthday attack is not in
-Tailscale's source at all. It is cloned at
+now been read, the decision was written down there, and both halves of
+it are built: `selfAddr.Addrs` publishes a *set* of independently
+measured addresses refreshed every 27 seconds instead of the one stale
+address DCUtR was given all along, and `internal/transport/upgrade.go`
+re-dials a relayed peer every five seconds for as long as it stays
+relayed, rather than giving up after DCUtR's three attempts. Whether
+that lands on the hotspot is unmeasured, and it is the only test that
+has ever been able to fail. Port mapping is closed on both ends and the
+birthday attack is not in Tailscale's source at all. It is cloned at
 `/Users/achmad/Documents/Belajar/tailscale` — a sibling to read, not a
 dependency; nothing here imports it and `CGO_ENABLED=0` and the
 package layout in `PLAN.md` §17 still bind. Read `derp` to understand
@@ -145,14 +150,10 @@ is a design change, not a refactor.
 - **`internal/fileapi` must not import libp2p.** The File API is the
   stable surface that WebDAV, the CLI, the control API and any future
   SFTP/FUSE adapter sit on. `PLAN.md` §8.
-- **No server on the data path, and since 7 Sep 2026 no relayed file
-  bytes either.** Mimir and heimdall coordinate: presence, addresses,
-  signalling, metadata in kilobytes. File data goes peer to peer or it
-  does not go — a peer with no direct path is reported unreachable, not
-  served through the relay. `SPEC.md` §24 and §6 carry the amendment.
-  Any design that routes file content through a server you control is
-  wrong here, and that now includes the relay as well as server-side
-  file managers like Filestash or File Browser.
+- **No server on the data path.** Mimir and heimdall coordinate. Bytes go
+  peer to peer, or through the relay as ciphertext. Any design that
+  routes file content through a server you control is wrong here — that
+  includes server-side file managers like Filestash or File Browser.
 - **Every filesystem call goes through `internal/fsroot`.** Clean, join to
   the root, `EvalSymlinks`, then verify the **resolved** path is still
   inside the root. Writes are different: the target does not exist yet, so
@@ -194,6 +195,17 @@ t=400ms only if the LAN stayed quiet. A LAN-discovered session dials the
 LAN multiaddr with no relay in the dial set, so nothing leaves the
 network. Falls back on either trigger: mDNS timed out, *or* the peer was
 found but the dial failed.
+
+**The path is never decided once.** LAN if the peer is here; otherwise
+the relay carries the session while `internal/transport/upgrade.go`
+keeps re-dialling the peer directly, from both ends, every five seconds
+for as long as it stays relayed. Both ends time from the same event —
+the relayed connection — so their dials cross, which is what makes two
+dials a hole punch. libp2p prefers the direct connection for every
+stream opened after it lands, so nothing switches over; `PathTo` reports
+the change because it reads the live connections. This is Tailscale's
+shape, not DCUtR's: DCUtR still runs, tries three times at connection
+time, and whichever of the two lands first ends both.
 
 **Presence and path are different questions.** Presence comes from mimir
 before connecting (`online`/`offline`/`unknown`). The path (`lan`/

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,17 @@ import (
 // unparseable, which is harmless, but it is also the answer we asked
 // for and nobody else can read it.
 
+// endpointsFresh is how long a measured set is worth believing.
+//
+// Tailscale's `endpointsFreshEnoughDuration`, taken with its reasoning
+// intact: a UDP mapping typically expires at thirty seconds, so a set
+// measured twenty-seven seconds ago names doors that are probably still
+// open, and the set measured when the agent started names doors that
+// certainly are not. Their `enqueueCallMeMaybe` checks this clock before
+// signalling and re-measures if it has run out; here the refresher runs
+// on it and the punch reads what the refresher left.
+const endpointsFresh = 27 * time.Second
+
 // selfAddr wraps the socket libp2p punches from and can name it.
 type selfAddr struct {
 	net.PacketConn
@@ -46,35 +58,86 @@ type selfAddr struct {
 	waiting map[string]chan string // transaction id -> where the answer goes
 
 	cacheMu sync.Mutex
-	cache   string
+	cache   []string
 	taken   time.Time
 }
 
-// Where returns this socket's public address as a reflector sees it, or
-// "" if none answers in time.
+// Addrs returns every public address this socket answers on, as several
+// reflectors see it independently, freshest first. Empty when none
+// answers in time.
 //
-// Answers are cached briefly. A hole punch asks for its own addresses
-// more than once within a few seconds, and on this carrier the port is
-// stable over that span — it drifts over minutes, not milliseconds. The
-// cache is what keeps one punch from measuring three different ports
-// and offering all of them as if they were alternatives.
-func (s *selfAddr) Where(within time.Duration) string {
+// One answer was never enough. A NAT can hold the mapping a first
+// observer was given while handing a second observer a different port,
+// and then the first port is a door with nobody behind it — netcheck's
+// GetGlobalAddrs describes exactly this case, "new traffic to the old
+// endpoint will not succeed, but new traffic to the newly discovered
+// endpoints does succeed". So ask everyone at once and offer the whole
+// set: DCUtR's CONNECT carries a list, and it has been handed one
+// address since the day it was wired up.
+//
+// The keep rule is theirs. The first answer back is kept whatever else
+// happens — it is the lowest-latency reflector's word, and dropping it
+// would leave a machine with a perfectly ordinary NAT advertising
+// nothing. Every other distinct address needs two independent sightings,
+// because an address one observer alone reports is a door minted for
+// that observer.
+//
+// Answers are cached for endpointsFresh. A punch asks more than once
+// within a few seconds and the set must not change underneath it.
+func (s *selfAddr) Addrs(within time.Duration) []string {
 	s.cacheMu.Lock()
-	if time.Since(s.taken) < 5*time.Second && s.cache != "" {
+	if time.Since(s.taken) < endpointsFresh && len(s.cache) > 0 {
 		defer s.cacheMu.Unlock()
 		return s.cache
 	}
 	s.cacheMu.Unlock()
 
-	for _, server := range stun.Servers() {
-		if a := s.ask(server, within); a != "" {
-			s.cacheMu.Lock()
-			s.cache, s.taken = a, time.Now()
-			s.cacheMu.Unlock()
-			return a
+	servers := stun.Servers()
+	answers := make(chan string, len(servers))
+	for _, server := range servers {
+		go func(server string) { answers <- s.ask(server, within) }(server)
+	}
+	order := make([]string, 0, len(servers))
+	seen := map[string]int{}
+	for range servers {
+		a := <-answers
+		if a == "" {
+			continue
+		}
+		if seen[a]++; seen[a] == 1 {
+			order = append(order, a)
 		}
 	}
-	return ""
+
+	out := keepCorroborated(order, seen)
+	if len(out) > 0 {
+		s.cacheMu.Lock()
+		s.cache, s.taken = out, time.Now()
+		s.cacheMu.Unlock()
+	}
+	if os.Getenv("RATATOSKR_DIAG") != "" {
+		// The counts, not just the addresses. A set of one means the
+		// reflectors agreed or it means seven of them never answered,
+		// and those are opposite networks reading the same on one line.
+		var say []string
+		for _, a := range order {
+			say = append(say, fmt.Sprintf("%s x%d", a, seen[a]))
+		}
+		fmt.Fprintf(os.Stderr, "punch addresses measured now (%d of %d reflectors answered): %s\n",
+			len(say), len(servers), strings.Join(say, ", "))
+	}
+	return out
+}
+
+// keepCorroborated applies the rule above to answers in arrival order.
+func keepCorroborated(order []string, seen map[string]int) []string {
+	var out []string
+	for i, a := range order {
+		if i == 0 || seen[a] > 1 {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (s *selfAddr) ask(server string, within time.Duration) string {
@@ -153,20 +216,14 @@ func (s *selfAddr) claim(b []byte) bool {
 // caller keeps the box rather than the thing.
 type socketRef struct{ v atomic.Pointer[selfAddr] }
 
-// Where names the socket, or returns "" before one exists or when no
-// reflector answers. It prints each fresh measurement under
-// RATATOSKR_DIAG, because the drift this defeats is otherwise invisible
-// in a run that simply works.
-func (r *socketRef) Where(within time.Duration) string {
+// Addrs names the socket, or returns nothing before one exists or when
+// no reflector answers.
+func (r *socketRef) Addrs(within time.Duration) []string {
 	s := r.v.Load()
 	if s == nil {
-		return ""
+		return nil
 	}
-	a := s.Where(within)
-	if a != "" && os.Getenv("RATATOSKR_DIAG") != "" {
-		fmt.Fprintf(os.Stderr, "punch address measured now: %s\n", a)
-	}
-	return a
+	return s.Addrs(within)
 }
 
 // ownSocket installs the wrapper and hands back the box the first IPv4

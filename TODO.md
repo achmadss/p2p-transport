@@ -100,7 +100,12 @@ choice. Do it before anything depends on the answer.
       is what the product is for, so a relay-only answer here is a
       failed step, not a finished one.
 - [x] Read Tailscale and take what applies (see below). Read 7 Sep 2026;
-      the decision is written down and the spike is what remains
+      the decision is written down and built 8 Sep 2026
+- [x] Publish a *set* of independently measured addresses, refreshed
+      every 27 seconds, rather than one address measured at startup
+- [ ] Retry the punch for as long as a peer is relayed, from both ends.
+      Built; unmeasured on the hotspot, which is the only test that
+      has ever been able to fail
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
@@ -533,12 +538,11 @@ socket, and a connection punched outside it cannot be handed back.
 
 **Step 3 stays open, and "use the relay" is not the answer.** A phone
 on a public network reaching a laptop at home is the ordinary way this
-product will be used, not an edge case. `SPEC.md` was amended on
-7 Sep 2026 to match: the relay carries no user file data at all, not
-even as a fallback, so a peer with no direct path is reported
-unreachable rather than served slowly. That removes the escape hatch
-this step was about to use, deliberately. The measurements above are
-the problem statement, not the conclusion.
+product will be used, not an edge case. `SPEC.md` §24 does allow a
+fallback relay, and §263 says in the same breath that it must not
+become the normal data path; on this carrier it would be exactly that,
+which is why falling back would be closing the step by relabelling it.
+The measurements above are the problem statement, not the conclusion.
 
 ### What to read next: Tailscale
 
@@ -766,10 +770,10 @@ DERP.** `net/udprelay` and `wgengine/magicsock/relaymanager.go` are
 Tailscale Peer Relays: one *node in the user's own tailnet*, with a
 routable address, forwards UDP for two nodes that failed to meet.
 `discoverUDPRelayPathsInterval` is 30s. That is worth naming here
-because it is the one relay shape `SPEC.md` §24 does not forbid — the
-bytes stay on the user's own hardware, which is the whole point of the
-amendment. It is not heimdall carrying file data; it is the user's
-desktop carrying it for the user's phone.
+because the bytes stay on the user's own hardware, so it costs the
+operator nothing and does not make heimdall the normal data path that
+`SPEC.md` §263 forbids. It is the user's desktop carrying it for the
+user's phone.
 
 ### 4. The decision, written before building it
 
@@ -786,8 +790,13 @@ from a rule. Three changes, all inside code that already exists:
 - **Ask several reflectors through `internal/transport/selfaddr.go`,
   not one.** It already owns libp2p's QUIC socket through
   `quicreuse.OverrideListenUDP`. Keep every distinct answer, and follow
-  `GetGlobalAddrs` in dropping any seen only once — a single sighting is
-  a door that was minted for that observer alone.
+  `GetGlobalAddrs` in requiring a second sighting before believing an
+  address — a single sighting is a door minted for that observer alone.
+  Their rule has an exception worth copying exactly: the best-latency
+  answer is kept whatever its count, and only the *others* need
+  corroborating. Without it a machine behind an ordinary NAT whose
+  reflectors happened to disagree would publish nothing at all, which is
+  a worse answer than one uncorroborated address.
 - **Re-measure on a clock shorter than the mapping lifetime**, and
   refresh before signalling rather than once at startup. 27 seconds is
   their number and there is no reason to invent another.
@@ -806,10 +815,10 @@ lands.
 
 **If it does not land, the answer is a peer relay and not heimdall.**
 One of the user's own machines with a routable address, forwarding for
-two that cannot meet — Tailscale's `net/udprelay`, and the only relay
-shape the 7 Sep amendment permits, because the bytes never leave
-hardware the user owns. That is a step of its own, not a fallback bolted
-onto this one.
+two that cannot meet — Tailscale's `net/udprelay`. It is preferable to
+heimdall because the bytes never leave hardware the user owns, which
+keeps §263 satisfied without spending the operator's egress. That is a
+step of its own, not a fallback bolted onto this one.
 
 ### Next session, in order
 
@@ -852,10 +861,12 @@ spent guessing at a network.
    The first keeps libp2p's identity, streams and relay for
    coordination; the second does not. Do not start typing until this
    paragraph has an answer in it.
-5. **Only then, the spike.** Whatever is chosen, it gets measured on
-   the same two machines before it is believed: home Wi-Fi to phone
-   hotspot, agent at least three minutes old, and the line to look for
-   is still `upgraded to direct`. The three-minute wait is not
+5. **Only then, the spike.** ~~Whatever is chosen~~ **Built, below; the
+   measurement is what remains.** It gets measured on the same two
+   machines before it is believed: home Wi-Fi to phone hotspot, agent at
+   least three minutes old, `RATATOSKR_DIAG=1` on both ends so the
+   measured set is printed, and the line to look for is
+   `connection to ... went direct`. The three-minute wait is not
    ceremony — every idea so far has passed at zero minutes and failed
    at three.
 
@@ -863,6 +874,55 @@ Two things to carry into it. `RATATOSKR_NO_MDNS=1` is needed on the
 hotspot Mac or the agent takes every terminal window down with it. And
 `scripts/punchpair.sh` measures the network without libp2p in the way,
 which is the control any new punching code needs beside it.
+
+### Built 8 Sep 2026: a set of addresses, and a punch that keeps trying
+
+Both halves of the decision above are in, and neither of them replaced
+DCUtR. The numbers are still owed.
+
+**The address is a set now.** `selfAddr.Addrs` asks every reflector in
+`stun.Servers()` at once on libp2p's own QUIC socket, keeps the first
+answer back plus every other address two reflectors agree on, and caches
+the result for `endpointsFresh` — 27 seconds, their constant and their
+reasoning. `Host.refreshMeasured` re-runs it on that clock and stores the
+set; the `AddrsFactory` that has been there since the relay work
+publishes it. That last part is what makes it reach a peer with nothing
+new on the wire: basichost recomputes `Addrs()` every five seconds, an
+address set that changed emits `EvtLocalAddressesUpdated`, and identify
+pushes it to everyone already connected. The punch filter offers the same
+set to DCUtR, where it used to offer one address.
+
+**And the punch is a loop rather than an event.**
+`internal/transport/upgrade.go`: every relayed connection, inbound or
+outbound, starts a goroutine that re-dials the peer's non-circuit
+addresses with `network.WithForceDirectDial` every five seconds until the
+path is direct, the peer disconnects, or the host closes. libp2p's own
+hole puncher gives up after three attempts against the addresses it had
+when the connection opened, and it is unexported, so it cannot be asked
+for a fourth — this runs beside it, not instead of it, and either one
+landing ends both.
+
+The reason it can skip DCUtR's round trip is worth writing down, because
+it is the whole trick: both ends start their clock from the same event,
+the relayed connection they share, so their dials land within a round
+trip of each other without negotiating anything. That is the agreement
+DCUtR spends a CONNECT/SYNC reaching. Each dial also opens the outbound
+mapping the other end's dial needs, which is what makes two crossing
+dials a hole punch. `bestConnToPeer` prefers an unlimited direct
+connection over a relayed one, so every stream opened after the upgrade
+takes the new path with nothing to switch over.
+
+`RATATOSKR_UPGRADE_EVERY` (5s) and `RATATOSKR_UPGRADE_DIAL` (5s) are the
+knobs. `RATATOSKR_PUNCH_WINDOW` went from 30 to 90 seconds, because a
+window shorter than one 27-second re-measurement reports a failure the
+next attempt would have fixed.
+
+**What is not yet known is whether it lands**, and the honest caveat from
+the decision above is unchanged: on this carrier a reflector saw `61482`
+while the relay saw `35749`, so every address in the set may be wrong
+about the port toward a peer. The set is cheap and bounded either way —
+three addresses in a CONNECT, one dial every five seconds — and the test
+is the one that has failed every previous idea.
 
 **The QUIC-first finding is withdrawn.** Aimed at the same span of
 ports the bare punch opens, a run with the bare window set to zero

@@ -92,13 +92,6 @@ Three facts to hold on to:
    ratatoskr, over `127.0.0.1`.
 2. Neither server holds a key that opens a file, and neither is on the
    data path unless the relay is in use — and then it forwards ciphertext.
-   **Amended 7 Sep 2026 with `SPEC.md`: the relay carries no file data
-   at all**, not even when no direct path can be opened. It carries
-   coordination — presence, addresses, signalling — and nothing measured
-   in megabytes. A transfer with no direct path fails and says so. Step
-   3 forced this: on the carrier measured, a fallback would be the
-   ordinary path for a phone reaching a laptop at home, which §6 of the
-   spec already forbade in the same breath as it allowed the fallback.
 3. The heavy line at the bottom is the only path file bytes take.
 
 ---
@@ -742,11 +735,13 @@ direct    a direct address, possibly after a successful hole punch
 relay     going through heimdall; these bytes cost money
 ```
 
-`relay` names a coordinating connection, not a transfer. Since the
-7 Sep 2026 amendment no file bytes take this path at any time, so a
-peer reachable only this way is reported unreachable rather than served
-slowly. The cost line above is what it costs to coordinate, and it is
-kilobytes.
+`relay` is a state to report and get out of, and getting out of it is
+something the agent keeps attempting rather than something it tries once
+at dial time: for as long as a peer is reachable only through heimdall,
+both ends re-dial it directly on a five-second clock, aiming at an
+address set that is re-measured every 27 seconds. `SPEC.md` §263 says as
+much — the relay must not become the normal data path — and step 3
+found a carrier on which, so far, it would be exactly that.
 
 The UI:
 
