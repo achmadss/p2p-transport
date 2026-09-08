@@ -28,13 +28,10 @@ product and its agent binary are both called Ratatoskr:
 ## Current state
 
 **TODO step 0 is done.** `internal/transport` is a libp2p host with QUIC
-and TCP, Noise security and an Ed25519 identity; `cmd/ratatoskr` has
-`dev-listen` and `dev-dial` speaking `/ratatoskr/echo/1.0.0`. The Pion
-prototype and its dependencies are gone.
-
-Those two dev subcommands are scaffolding. They exist to prove a stream
-carries bytes, and they are deleted once `run` and `connect` (`PLAN.md`
-§16) replace them — do not build features on them.
+and TCP, Noise security and an Ed25519 identity, and `run` and `connect`
+(`PLAN.md` §16) speak `/ratatoskr/echo/1.0.0` over it. The Pion
+prototype, its dependencies and the `dev-listen`/`dev-dial` scaffolding
+they replaced are gone.
 
 **TODO step 1 is done.** `internal/config` owns the per-OS config
 directory (0700) and `config.json`; `internal/identity` owns
@@ -76,7 +73,7 @@ so no address a third party observes names the door a peer must dial. A
 punch lands in 251 ms when the agent is seconds old and never once it is
 minutes old; a measured address, a span of five and a span of sixty-six
 have all failed. The relay carries this case meanwhile and carries it
-properly: `SPEC.md` §24 allows the fallback, the owner has confirmed
+properly: `SPEC.md` §1 allows the fallback, the owner has confirmed
 that using it is not a failure, and a transfer that goes over heimdall
 is a transfer that happened. What is wrong is only that on this carrier
 the fallback would be the *normal* path, which §6 forbids — so the punch
@@ -114,12 +111,13 @@ A machine learns its public address two ways, and the difference is the
 whole of step 3. Asking a relay over `/ratatoskr/observed/1.0.0` names
 the port of a connection opened at startup, which on a carrier that
 renumbers is stale within minutes. `internal/transport/selfaddr.go`
-wraps libp2p's own QUIC socket through
-`quicreuse.OverrideListenUDP`, asks a reflector on it at the moment
-DCUtR needs an address, and claims the reply before quic-go sees it —
-so the address offered is measured on the socket that punches, when it
-punches. That is correct and still insufficient here, because the port
-toward a peer is not the port toward a reflector.
+wraps libp2p's own QUIC socket through `quicreuse.OverrideListenUDP`,
+asks every reflector in `internal/stun` on it, and claims the replies
+before quic-go sees them — so what is offered is measured on the socket
+that punches, never older than 27 seconds, and a set rather than a
+guess. It is still not proof: the port toward a peer is not the port
+toward a reflector, which is why the punch is retried rather than
+aimed once.
 
 `scripts/punch.py` is the same punch with no libp2p in it, and is the
 control every DCUtR failure needs beside it. `scripts/punchpair.sh`

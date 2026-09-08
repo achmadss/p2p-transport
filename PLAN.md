@@ -739,7 +739,7 @@ relay     going through heimdall; these bytes cost money
 something the agent keeps attempting rather than something it tries once
 at dial time: for as long as a peer is reachable only through heimdall,
 both ends re-dial it directly on a five-second clock, aiming at an
-address set that is re-measured every 27 seconds. `SPEC.md` §263 says as
+address set that is re-measured every 27 seconds. `SPEC.md` §6 says as
 much — the relay must not become the normal data path — and step 3
 found a carrier on which, so far, it would be exactly that.
 

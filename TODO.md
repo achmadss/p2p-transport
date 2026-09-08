@@ -93,7 +93,7 @@ choice. Do it before anything depends on the answer.
       and MB/s on a 1 Gbps LAN and over the Internet
 - [x] Test: home Wi-Fi to phone hotspot — the peers meet and move bytes,
       over the relay. That is a working transfer and it counts as one:
-      `SPEC.md` §24 allows the relay to carry file data when no direct
+      `SPEC.md` §1 allows the relay to carry file data when no direct
       path can be opened, and the owner has said plainly that using it
       is not a failure.
 - [ ] Test: home Wi-Fi to phone hotspot, *direct*. A punch lands in
@@ -102,7 +102,7 @@ choice. Do it before anything depends on the answer.
       observe, and nothing offered — a measured address, a span of five,
       a span of sixty-six — has landed since. This is the common case
       rather than the hard one, so leaving it relayed for ever is what
-      §263 forbids; the transfer still works meanwhile.
+      §6 forbids; the transfer still works meanwhile.
 - [x] Read Tailscale and take what applies (see below). Read 7 Sep 2026;
       the decision is written down and built 8 Sep 2026
 - [x] Publish a *set* of independently measured addresses, refreshed
@@ -116,15 +116,9 @@ choice. Do it before anything depends on the answer.
       how a torrent client stays off relays. Kept even though this house
       is behind carrier NAT and it cannot help here.
 
-**Code is done, the measurement is not.** heimdall relays, the agent
-takes a reservation, and `connect --via lan|relay|auto` works: verified
-on loopback with three processes, where `auto` chose the LAN and
-`--via relay` was reported as `relay` at both ends. Loopback proves the
-plumbing and nothing about NAT, which is the whole point of the step,
-so the remaining boxes stay open until heimdall runs on the VPS.
-
-Two things loopback taught anyway. A relayed connection is *limited* in
-libp2p and refuses streams unless the dial opts in, which is why the
+**Two things loopback taught before the VPS existed.** A relayed
+connection is *limited* in libp2p and refuses streams unless the dial
+opts in, which is why the
 first relayed attempt hung rather than failed. And AutoNAT declines to
 reserve until it believes it is unreachable, which on loopback needed
 forcing; the same gate turned out to block every real machine too, and
@@ -218,9 +212,12 @@ from one socket and compares what each one sees, which is the test RFC
 | phone, hotspot  | 60474 | `182.6.161.1:14650` |
 
 One external port per socket, the same one for every destination. That
-is **Endpoint-Independent Mapping** on both sides, which is the shape
-DCUtR is built for. Neither NAT is symmetric and neither is the reason
-the punch fails.
+reads as **Endpoint-Independent Mapping** on both sides, which is the
+shape DCUtR is built for. *This verdict does not survive the section
+below.* Every observer asked inside one second agrees, and the question
+that separates this carrier from a cone NAT can only be asked of a
+destination it has never spoken to. Read on to "the mapping is not
+stale, it is per-destination" before believing the table.
 
 The reason is in our own log. Before each attempt the Mac announces:
 
@@ -304,14 +301,15 @@ on Windows meets the same three walls.
 exist on paper. If throughput or punch rate is bad, stop and reconsider
 here rather than at step 9.
 
-**Verdict: pass, with one requirement added.** Machines on different
-networks connect, transfer, and verify their byte counts. The punch rate
-is zero, which is *not* expected now that both NATs are known to be
-endpoint-independent, and the cause is ours to fix rather than the
-carriers' to explain. It does change what the later steps must assume: a transfer
-may run at relay speed for its whole life, so resume, progress and
-cancellation are load-bearing rather than polish, and step 11's metering
-is what stops one such transfer from spending a month of VPS egress.
+**Verdict: pass on connectivity, open on the direct path.** Machines on
+different networks connect, transfer, and verify their byte counts, and
+the relay carrying them is a permitted outcome rather than a failed one.
+The punch rate is zero, and the sections below trace why through three
+wrong readings to a carrier that renumbers per destination. It changes
+what the later steps must assume: a transfer may run at relay speed for
+its whole life, so resume, progress and cancellation are load-bearing
+rather than polish, and step 11's metering is what stops one such
+transfer from spending a month of VPS egress.
 
 ## Step 3.5 — Relay hygiene
 
@@ -443,7 +441,7 @@ same minute with one variable between the runs.
 So DCUtR was never failing. It was dialling a port the carrier had
 already moved off, and it had exactly one candidate to be wrong about.
 Given three, it punched on the first attempt. `RATATOSKR_ADDR_SPREAD`
-is off by default and this is what it is for.
+was the knob for it; the paragraphs below are why it no longer exists.
 
 The `+1` held again here: the relay observed 63189 in one run and
 35629 in the next, and the ports advertised around it are what carried
@@ -471,11 +469,9 @@ That settles the design rather than leaving it open.
 there is no constant to measure. The address to publish has to be
 taken on libp2p's own socket, toward a destination it has not spoken
 to, at the moment of the punch — not read off a connection opened at
-startup. `internal/transport/wiretap.go` already holds the only hook
+startup. `internal/transport/selfaddr.go` holds the only hook
 that reaches that socket (`quicreuse.OverrideListenUDP`), which is why
-it survived the clear-out. (It has since become
-`internal/transport/selfaddr.go`, which does the asking rather than
-the counting.) What remains is to send a reflector query
+it survived the clear-out. What remained was to send a reflector query
 through it, intercept the reply before quic-go sees it, and hand the
 answer to the DCUtR address filter that `EnableHolePunching` already
 takes.
@@ -500,16 +496,18 @@ relay door and its peer door two apart, which a span of three covered.
 Minutes later they are nowhere near each other, which is exactly why
 that spread passed its test and would have failed in use.
 
-That is the end of the road for hole punching on this network, and it
-is the answer the step existed to find rather than a failure to reach
-one. A symmetric carrier leaves the relay, which is what `PLAN.md` put
-heimdall there for and what it already carries as ciphertext.
+That read as the end of the road, and it was the end of *this* road: no
+address a third party observes can name the door a peer must dial, so
+publishing one better address cannot work here. What follows from it is
+the relay, which is what `PLAN.md` put heimdall there for and what it
+already carries as ciphertext — and, from 8 Sep, a set of addresses and
+a punch that keeps being retried rather than a single aim taken once.
 
-`natcheck` still calls this network endpoint-independent. It is narrow
+`natcheck` called this network endpoint-independent, which was narrow
 rather than wrong: four observers asked inside one second do agree, and
-the disagreement needs a longer window or an older socket. A NAT
-classification taken at startup therefore says less than it appears to.
-Worth fixing when it next matters; not worth trusting now.
+the disagreement needs a longer window or a destination never spoken
+to. It now asks over six rounds and three minutes, spending a reflector
+per round; see the netcheck section below.
 
 The measurement stays. It removed a toggle nobody could have set, costs
 one reflector round trip per punch, and on any network whose published
@@ -543,9 +541,9 @@ socket, and a connection punched outside it cannot be handed back.
 **Step 3 stays open for the direct path, and the relay is not what is
 open about it.** A phone on a public network reaching a laptop at home
 is the ordinary way this product will be used, not an edge case, and it
-works today: the relay carries it, `SPEC.md` §24 permits exactly that,
+works today: the relay carries it, `SPEC.md` §1 permits exactly that,
 and a transfer that goes over heimdall is a transfer that happened. What
-§263 forbids is the relay becoming the *normal* path, and on this
+§6 forbids is the relay becoming the *normal* path, and on this
 carrier it currently is. So the measurements above are a problem
 statement about the punch rather than about the product being unusable,
 and the work is to make direct the common outcome rather than to refuse
@@ -779,10 +777,10 @@ routable address, forwards UDP for two nodes that failed to meet.
 `discoverUDPRelayPathsInterval` is 30s. That is worth naming here
 because the bytes stay on the user's own hardware, so it costs the
 operator nothing and does not make heimdall the normal data path that
-`SPEC.md` §263 forbids. It is the user's desktop carrying it for the
+`SPEC.md` §6 forbids. It is the user's desktop carrying it for the
 user's phone.
 
-### 4. The decision, written before building it
+### The decision, written before building it
 
 The two shapes offered were "punch below libp2p" and "dial without
 DCUtR". **Neither. Keep DCUtR and fix what is handed to it**, because
@@ -824,58 +822,22 @@ lands.
 One of the user's own machines with a routable address, forwarding for
 two that cannot meet — Tailscale's `net/udprelay`. It is preferable to
 heimdall because the bytes never leave hardware the user owns, which
-keeps §263 satisfied without spending the operator's egress. That is a
+keeps §6 satisfied without spending the operator's egress. That is a
 step of its own, not a fallback bolted onto this one.
 
-### Next session, in order
+### What is left: the measurement
 
-Nothing here writes code until step 4 of this list. Everything above it
-is reading, and the reading is cheap compared with a second evening
-spent guessing at a network.
+The reading list that stood here has been read, decided and built. Its
+answers are the three `Read:` sections and the decision above, and the
+`Built 8 Sep 2026` section below. What it asked for and never got is the
+test, which nothing has passed yet.
 
-1. ~~**`net/netcheck` first.**~~ **Done, above.** `ratatoskr natcheck` called this carrier
-   endpoint-independent and it is not; four reflectors asked inside one
-   second agreed with each other and were all wrong about a fifth
-   destination. Read what Tailscale's probe asks, how long it takes,
-   and what it names this class. **Pass/fail: run their probe or
-   reimplement its question, and get a verdict that matches what was
-   measured here.** Until a classifier tells the truth about this
-   network, nothing built on top of it can be trusted — and ours
-   currently says the punch should work.
-2. ~~**`net/portmapper`.**~~ **Done, above.** `libp2p.NATPortMap()` is enabled and achieved
-   nothing: the router accepted `AddPortMapping` and could not name its
-   own external address, because the carrier NAT sits above it. Read
-   whether UPnP, NAT-PMP and PCP are all tried, what order, and what
-   they do when the answer is that shape. **Pass/fail: an explanation
-   of why the home router's mapping is useless that is measured rather
-   than assumed, and a statement of whether the phone side can ever be
-   mapped.**
-3. ~~**`wgengine/magicsock` and `disco`, together.**~~ **Done, above.** These are the design
-   question: one socket, many candidate paths, continuous re-probing,
-   and an upgrade from relayed to direct that happens later and by
-   itself. Note especially how a path is *chosen* and how the upgrade
-   is *noticed*, because `connect` already serves over the relay and
-   upgrades in the background and that behaviour must survive whatever
-   replaces DCUtR. Read their hard-NAT handling here too, and write
-   down the actual numbers — how many ports, how many sockets, for how
-   long, and what they do when it fails.
-4. ~~**Then decide, and write the decision down before building it.**~~ **Done, above.** The
-   choice is between two shapes and it should be made on paper. Either
-   the punching moves below libp2p — a `quicreuse` socket that has
-   already opened the path before QUIC is handed it, which
-   `internal/transport/selfaddr.go` proves is reachable — or this
-   project dials a peer without DCUtR's help at all. Both are large.
-   The first keeps libp2p's identity, streams and relay for
-   coordination; the second does not. Do not start typing until this
-   paragraph has an answer in it.
-5. **Only then, the spike.** ~~Whatever is chosen~~ **Built, below; the
-   measurement is what remains.** It gets measured on the same two
-   machines before it is believed: home Wi-Fi to phone hotspot, agent at
-   least three minutes old, `RATATOSKR_DIAG=1` on both ends so the
-   measured set is printed, and the line to look for is
-   `connection to ... went direct`. The three-minute wait is not
-   ceremony — every idea so far has passed at zero minutes and failed
-   at three.
+**Measure it on the same two machines.** Home Wi-Fi to phone hotspot,
+the agent at least three minutes old, `RATATOSKR_DIAG=1` on both ends so
+the measured set and its reflector counts are printed, and the line to
+look for is `connection to ... went direct`. The three-minute wait is not
+ceremony — every idea so far has passed at zero minutes and failed at
+three.
 
 Two things to carry into it. `RATATOSKR_NO_MDNS=1` is needed on the
 hotspot Mac or the agent takes every terminal window down with it. And
@@ -942,23 +904,12 @@ port creeps every few seconds that is two aims, not two payloads. It
 read as a property of QUIC because both halves were wrong about the
 port and only one of them was wrong quietly.
 
-What survives it is better. Three things are now measured rather than
-inferred: this carrier's external port advances with time and holds
-once advanced; the advance is +1 across every reading taken; and a
-punch aimed at a span covering it crosses immediately, with QUIC first
-or last, at one second of warm-up or none. Nothing about the path
-resists a hole punch. What defeats it is exclusively the staleness of
-the address that gets published.
-
-Which leaves one suspect and one measurement. `/ratatoskr/observed/
-1.0.0` asks a relay for this machine's public address and an
-`AddrsFactory` advertises it; a peer dials it some seconds later.
-`internal/transport/wiretap.go` (now `selfaddr.go`) already counts what
-libp2p's own QUIC socket sends and to where, so the test is to run the agent with the
-tap on and compare the port its packets actually leave from with the
-port it advertised. If those differ by one, DCUtR has been dialling a
-port nobody was behind for the whole of this step, and neither libp2p
-nor quic-go was ever at fault.
+What survives it is one finding: nothing about the path resists a hole
+punch, at one second of warm-up or none. What defeats it is the address
+that gets published. The rest of that paragraph — that the port advances
+with time, holds once advanced, and advances by one — was read from a
+carrier that turned out to renumber per destination, and the sections
+above retract it.
 
 Two fixes that fell out of the punch measurement, both small, both done
 before anything builds on the transport.
