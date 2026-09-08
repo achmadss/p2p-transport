@@ -91,14 +91,18 @@ choice. Do it before anything depends on the answer.
       and how long the upgrade took
 - [x] **Measure and write down**: hole punch success rate, time to punch,
       and MB/s on a 1 Gbps LAN and over the Internet
-- [ ] Test: home Wi-Fi to phone hotspot. A punch lands in 251 ms only
-      when the agent is seconds old; minutes later the carrier's port is
-      unrelated to any address a third party can observe, and nothing
-      offered — a measured address, a span of five, a span of
-      sixty-six — has landed since. **This is the common case, not the
-      hard one**: a phone on a public network reaching a laptop at home
-      is what the product is for, so a relay-only answer here is a
-      failed step, not a finished one.
+- [x] Test: home Wi-Fi to phone hotspot — the peers meet and move bytes,
+      over the relay. That is a working transfer and it counts as one:
+      `SPEC.md` §24 allows the relay to carry file data when no direct
+      path can be opened, and the owner has said plainly that using it
+      is not a failure.
+- [ ] Test: home Wi-Fi to phone hotspot, *direct*. A punch lands in
+      251 ms only when the agent is seconds old; minutes later the
+      carrier's port is unrelated to any address a third party can
+      observe, and nothing offered — a measured address, a span of five,
+      a span of sixty-six — has landed since. This is the common case
+      rather than the hard one, so leaving it relayed for ever is what
+      §263 forbids; the transfer still works meanwhile.
 - [x] Read Tailscale and take what applies (see below). Read 7 Sep 2026;
       the decision is written down and built 8 Sep 2026
 - [x] Publish a *set* of independently measured addresses, refreshed
@@ -536,13 +540,16 @@ only remaining trick, and it is a coin flip costing thousands of
 packets that libp2p cannot be asked to perform: DCUtR punches with one
 socket, and a connection punched outside it cannot be handed back.
 
-**Step 3 stays open, and "use the relay" is not the answer.** A phone
-on a public network reaching a laptop at home is the ordinary way this
-product will be used, not an edge case. `SPEC.md` §24 does allow a
-fallback relay, and §263 says in the same breath that it must not
-become the normal data path; on this carrier it would be exactly that,
-which is why falling back would be closing the step by relabelling it.
-The measurements above are the problem statement, not the conclusion.
+**Step 3 stays open for the direct path, and the relay is not what is
+open about it.** A phone on a public network reaching a laptop at home
+is the ordinary way this product will be used, not an edge case, and it
+works today: the relay carries it, `SPEC.md` §24 permits exactly that,
+and a transfer that goes over heimdall is a transfer that happened. What
+§263 forbids is the relay becoming the *normal* path, and on this
+carrier it currently is. So the measurements above are a problem
+statement about the punch rather than about the product being unusable,
+and the work is to make direct the common outcome rather than to refuse
+the fallback while it is not.
 
 ### What to read next: Tailscale
 

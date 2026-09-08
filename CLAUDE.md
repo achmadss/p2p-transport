@@ -69,16 +69,19 @@ DCUtR and the relay client when `config.json` names a relay, and
 400 ms head start, per `PLAN.md` §6. LAN and relay are measured: 65
 MB/s over Wi-Fi, 3.7 MB/s relayed.
 
-**What is not solved is a phone on a public network reaching a laptop
-at home, and that is the ordinary case rather than an edge one.** The
-carrier tested gives every new destination an unrelated port, so no
-address a third party observes names the door a peer must dial. A
-punch lands in 251 ms when the agent is seconds old and never once it
-is minutes old; a measured address, a span of five and a span of
-sixty-six have all failed. Relaying is a fallback the spec allows, but
-`SPEC.md` §6 forbids it becoming the normal data path and on this
-carrier it would be exactly that, so the punch still has to land.
-`TODO.md` step 3 carries the numbers and the plan. Tailscale's
+**What is not solved is a *direct* path from a phone on a public network
+to a laptop at home, and that is the ordinary case rather than an edge
+one.** The carrier tested gives every new destination an unrelated port,
+so no address a third party observes names the door a peer must dial. A
+punch lands in 251 ms when the agent is seconds old and never once it is
+minutes old; a measured address, a span of five and a span of sixty-six
+have all failed. The relay carries this case meanwhile and carries it
+properly: `SPEC.md` §24 allows the fallback, the owner has confirmed
+that using it is not a failure, and a transfer that goes over heimdall
+is a transfer that happened. What is wrong is only that on this carrier
+the fallback would be the *normal* path, which §6 forbids — so the punch
+is an upgrade worth going on working at, not a precondition for the
+product. `TODO.md` step 3 carries the numbers and the plan. Tailscale's
 `net/portmapper`, `net/netcheck`, `wgengine/magicsock` and `disco` have
 now been read, the decision was written down there, and both halves of
 it are built: `selfAddr.Addrs` publishes a *set* of independently

@@ -35,12 +35,14 @@ const version = "0.0.1"
 //	dialTimeout   the whole attempt. A relayed dial has a reservation
 //	              and a hole punch to get through first.
 //	benchTimeout  a whole measurement, which moves real bytes.
-//	punchWindow   how long a relayed connection is watched for an
-//	              upgrade to a direct one before the punch is called a
-//	              failure. Longer than it looks it needs to be: the
+//	punchWindow   how long `bench` watches a relayed connection for an
+//	              upgrade to a direct one before it stops watching. It
+//	              bounds the reporting, not the punching: the transport
+//	              goes on retrying for the life of the session either
+//	              way. Longer than it looks it needs to be, because the
 //	              address set a punch aims at is re-measured every 27
-//	              seconds, so a window shorter than that reports a
-//	              failure the retry would have fixed.
+//	              seconds and a shorter window would report nothing
+//	              where the next attempt had something.
 var (
 	lanTimeout   = config.Duration("RATATOSKR_LAN_TIMEOUT", 3*time.Second)
 	lanHeadStart = config.Duration("RATATOSKR_LAN_HEAD_START", 400*time.Millisecond)
@@ -503,7 +505,10 @@ func watchUpgrade(h *transport.Host, id peer.ID) {
 	for {
 		select {
 		case <-deadline:
-			fmt.Printf("still relayed after %s: no direct path yet\n", punchWindow)
+			// Not a failed transfer: the bytes above went through. Only
+			// the upgrade is outstanding, and it keeps being retried
+			// for as long as the session lasts.
+			fmt.Printf("still relayed after %s; the transfer worked, the direct path has not opened yet\n", punchWindow)
 			return
 		case <-tick.C:
 			if p := h.PathTo(id); p == transport.PathDirect || p == transport.PathLAN {
