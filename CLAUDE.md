@@ -102,10 +102,11 @@ never has that many, so configuring a relay now forces the reservation
 and `RATATOSKR_ASSUME_PUBLIC` opts a genuinely reachable machine out. A
 circuit address does not appear in `host.Addrs()` on loopback, so `run`
 prints the peer id to copy rather than an address it cannot promise.
-And one machine takes every terminal window down the moment the agent
-opens a multicast socket — a content filter below the socket fails
-every packet to 224.0.0.251 — so `RATATOSKR_NO_MDNS` exists to run the
-agent without one. It is not optional on that machine; see **Commands**.
+And `RATATOSKR_NO_MDNS` exists to run the agent without opening a
+multicast socket at all, which some networks and some endpoint security
+agents object to. One machine here runs such an agent, and it deletes
+the binary and kills the terminal that started it; see **Commands**
+before running anything there.
 
 A machine learns its public address two ways, and the difference is the
 whole of step 3. Asking a relay over `/ratatoskr/observed/1.0.0` names
@@ -128,32 +129,37 @@ Nothing else in `PLAN.md`'s package layout exists yet.
 
 ## Commands
 
-**`RATATOSKR_NO_MDNS=1` goes in the environment of every binary this
-repo builds and every script in `scripts/`, without exception and
-whichever one it is.** Not just `ratatoskr` and `heimdall`, and not just
-the subcommands that obviously serve: anything that might start an agent
-counts, and a binary added later counts before anyone has checked what
-it opens. On this machine a content filter below the socket fails every
-packet to 224.0.0.251, so the moment a process opens a multicast socket
-it takes every terminal window on the machine down with it — the session
-running the command included. Put the variable on the command itself
-rather than in a parent shell that a later command may not inherit.
+**Enterprise security agents stop this app from running.** The Mac used
+for development has Palo Alto Cortex XDR and Leagsoft EPP endpoint
+security extensions active, and they treat an agent that asks eight STUN
+servers at once and then dials arbitrary ports on a peer as a port
+scanner. What happens is not a crash and leaves no crash report: the
+process is killed, `dist/ratatoskr` is deleted off disk, and the
+application that launched it is killed too — so a `run` started from
+Terminal.app takes every Terminal window with it, while a different
+terminal app is untouched.
+
+So on this machine the binaries are started by the person at the
+keyboard, never by an agent working on the repo. `make build`, `make
+vet` and the test list below are safe; `run`, `bench`, `connect` and
+everything in `scripts/` are not. On a managed laptop the fix is a
+signed binary and an exclusion by hash from whoever runs the agent, and
+that is a product problem rather than a local one — every user on a
+corporate machine meets the same wall.
+
+**`RATATOSKR_NO_MDNS=1` still goes on every binary this repo builds and
+every script in `scripts/`**, whichever one it is, including ones added
+later. Opening a multicast socket is one more unusual behaviour on a
+machine that is being watched for them, and the flag costs nothing.
+Put it on the command itself rather than in a parent shell a later
+command may not inherit. It is a precaution and not protection: runs
+with the flag set have been killed anyway.
 
 That extends to the tests, because `internal/discovery` opens a real
-one. `make test` and `go test ./...` are therefore unsafe here; run an
-explicit package list instead. The discovery tests cannot simply be run
-with the variable set — they need the socket they would be denied — so
-on this machine they do not get run at all.
-
-**And the variable is not sufficient.** A loopback run of heimdall and
-two agents took the terminal down with `RATATOSKR_NO_MDNS=1` exported
-before any of them started, and heimdall does not import
-`internal/discovery` at all — so multicast was not the trigger that
-time and the filter reacts to something else these processes do. On this
-machine an agent is therefore started by the person at the keyboard,
-never by an agent working on the repo: build, vet and the test list are
-safe, and `run`, `bench`, `connect` and everything in `scripts/` are
-not.
+multicast socket. `make test` and `go test ./...` are therefore unsafe
+here; run an explicit package list instead. The discovery tests cannot
+be rescued by setting the variable — it denies them the socket they are
+testing — so on this machine they do not get run at all.
 
 ```bash
 make build                      # -> dist/ratatoskr

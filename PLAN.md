@@ -976,6 +976,7 @@ that packaging exists. Worth stating rather than quietly missing.
 | mimir becomes a single point of failure | High | It is. Grants are cached and mDNS needs no server, so LAN use survives an outage. Say so in the UI |
 | mDNS blocked on real networks | Medium | Falls through after the head start. Measure how often the LAN wins |
 | Firewall prompts confuse users at first run | High | UDP 5353 and the QUIC port. A packaging problem — note it now |
+| Endpoint security kills the agent on a managed machine | High | Met on a development Mac: Cortex XDR scores eight STUN queries followed by dials to arbitrary peer ports as a scanner, kills the process, deletes the binary and kills the app that launched it. Signing and notarisation are the floor; an exclusion by hash is what a corporate fleet needs. A packaging problem, and it makes the app unusable rather than slow |
 | Users will not install software on every client | Medium | The trade the spec chose. Browser-as-peer stays possible later, at real cost |
 | Agent upload speed is the real ceiling | Certain | Nothing to fix. Report it honestly |
 

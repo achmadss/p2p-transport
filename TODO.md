@@ -839,10 +839,14 @@ look for is `connection to ... went direct`. The three-minute wait is not
 ceremony — every idea so far has passed at zero minutes and failed at
 three.
 
-Two things to carry into it. `RATATOSKR_NO_MDNS=1` is needed on the
-hotspot Mac or the agent takes every terminal window down with it. And
+**Not from the development Mac**, which cannot run the test at all. Its
+endpoint security kills the agent, deletes `dist/ratatoskr` and takes
+the launching terminal with it, and Cloudflare WARP gives it a different
+port per destination, so even a run that survived would be measuring
+WARP rather than a carrier. `CLAUDE.md` under **Commands** has the
+detail. `RATATOSKR_NO_MDNS=1` still goes on every run, and
 `scripts/punchpair.sh` measures the network without libp2p in the way,
-which is the control any new punching code needs beside it.
+which is the control any punch failure needs beside it.
 
 ### Built 8 Sep 2026: a set of addresses, and a punch that keeps trying
 
