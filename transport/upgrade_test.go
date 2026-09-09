@@ -22,7 +22,7 @@ func TestUpgradeStopsOnceThePathIsDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	done := make(chan struct{})
@@ -41,7 +41,7 @@ func TestUpgradeStopsOnceThePathIsDirect(t *testing.T) {
 func TestUpgradeStopsWhenThePeerIsGone(t *testing.T) {
 	defer swap(&upgradeEvery, 10*time.Millisecond)()
 
-	h := &Host{h: newHost(t), done: make(chan struct{})}
+	h := wrap(newHost(t))
 	defer h.Close()
 
 	done := make(chan struct{})
@@ -104,7 +104,7 @@ func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	got := h.askAddrs(ctx, b.ID())
@@ -145,7 +145,7 @@ func TestRepairGivesUpOnAPeerThatIsGone(t *testing.T) {
 	defer swap(&upgradeEvery, 10*time.Millisecond)()
 	defer swap(&restoreFor, 100*time.Millisecond)()
 
-	h := &Host{h: newHost(t), done: make(chan struct{})}
+	h := wrap(newHost(t))
 	defer h.Close()
 
 	gone := newHost(t).ID()
@@ -175,7 +175,7 @@ func TestRepairReadsTheRungNotTheEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	if p := h.repair(b.ID()); p != PathLAN {

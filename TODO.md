@@ -131,10 +131,57 @@ timing on a real pair is a `bench` run for the owner to make.
 - [ ] Sleep and wake, on all three operating systems
 - [ ] Wi-Fi to Ethernet and back, mid-transfer; cable pulled and replaced
 - [ ] The relay restarted underneath a relayed pair
-- [ ] A peer that is simply gone: give up and say so
-- [ ] No goroutine leak after a thousand connect/disconnect cycles
+- [x] A peer that is simply gone: give up and say so
+- [x] No goroutine leak after a thousand connect/disconnect cycles
 
 **Check:** every one reconnects or fails loudly. Nothing hangs.
+
+The two boxes that are a piece of code are ticked; the three that are a
+person moving a cable are not, and cannot be from here.
+
+Giving up was already built. `restore` chases a peer whose every path has
+gone for `restoreFor`, and returns whether it came back, so `repair`
+either climbs the ladder again or lets the peer go. Saying so needed
+nothing new either: the disconnection publishes `unknown` to everyone
+watching, and the next `Open` returns `ErrUnreachable` rather than
+hanging. `TestRepairGivesUpOnAPeerThatIsGone` holds the first half and
+`error_test.go` the second. The leak check is
+`TestManyCyclesLeakNoGoroutines` — a thousand real connect and disconnect
+cycles, then a wait for the goroutine count to come back — and it runs in
+under a second, so it stays in the ordinary test run.
+
+What the three remaining boxes needed in code was a way to notice the
+world had moved, and two ways were missing.
+
+The relay was dialled once, at startup. `holdRelays` now re-runs on
+`EvtLocalAddressesUpdated`, because a machine that moves from Wi-Fi to a
+cable has a new address to be observed at and, if the move dropped the
+relay connection, no reservation left to be reached through. It also
+re-runs every minute, because a relay that reboots is a change to nothing
+on this machine and so raises no event on it — a minute rather than the
+five seconds a peer is chased at, since a restarting relay is back almost
+immediately and one gone for good should not cost a dial every five
+seconds forever. An outage prints one line and the recovery prints one
+more, instead of one a minute for as long as it lasts.
+
+The other was shutdown. Closing the host disconnects every peer, and each
+of those disconnections arrived at the hook that starts a chase, so the
+last act of a close was to start work for peers it had just dropped.
+`Close` now stops the background work before the host rather than after,
+`repair` refuses to start once the context is cancelled, and the dials
+hang off a host context instead of `context.Background()`.
+
+**Honest about that last one:** it is the right shape and it is not a
+leak that was measured. A test that closed the host during a dial passed
+against the old code too, because libp2p tears its transports down and
+that aborts the dial on the way out. The test was deleted rather than
+kept as a check that cannot fail.
+
+**Not measured yet**, and each needs a person at a keyboard: sleep and
+wake on all three operating systems, a cable pulled and replaced
+mid-transfer, and heimdall restarted under a relayed pair. Run the third
+first — it is the only one whose fix is new code rather than machinery
+that was already there.
 
 ## Step 7 — The relay fleet
 

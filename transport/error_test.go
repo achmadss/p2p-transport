@@ -18,7 +18,7 @@ import (
 // error tells them apart.
 func TestOpenTellsRefusedFromUnreachable(t *testing.T) {
 	a, b := newHost(t), newHost(t)
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -48,7 +48,7 @@ func TestOpenTellsRefusedFromUnreachable(t *testing.T) {
 // survive untagged or every completed transfer reads as a failure.
 func TestStreamDeathIsUnreachableAndEOFIsNot(t *testing.T) {
 	a, b := newHost(t), newHost(t)
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	const proto = "/test/hold/1.0.0"

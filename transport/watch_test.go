@@ -14,7 +14,7 @@ import (
 // changes would wait for an event on a peer already connected.
 func TestWatchDeliversTheCurrentPathThenTheChange(t *testing.T) {
 	a, b := newHost(t), newHost(t)
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 	h.watchForRelayed()
 
@@ -40,7 +40,7 @@ func TestWatchDeliversTheCurrentPathThenTheChange(t *testing.T) {
 // still open on that connection rather than on the placeholder.
 func TestWatchOfAConnectedPeerStartsThere(t *testing.T) {
 	a, b := newHost(t), newHost(t)
-	h := &Host{h: a, done: make(chan struct{})}
+	h := wrap(a)
 	defer h.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -61,7 +61,7 @@ func TestWatchOfAConnectedPeerStartsThere(t *testing.T) {
 // Cancelling afterwards must still be safe, since the usual shape is a
 // deferred stop outliving a deferred Close.
 func TestWatchEndsWithTheHost(t *testing.T) {
-	h := &Host{h: newHost(t), done: make(chan struct{})}
+	h := wrap(newHost(t))
 	paths, stop := h.watch(newHost(t).ID())
 	next(t, paths) // the seeded path
 
@@ -77,7 +77,7 @@ func TestWatchEndsWithTheHost(t *testing.T) {
 // and must never block on a slow reader, so the buffer holds one value
 // and a stale one is dropped. What arrives is where the peer is now.
 func TestPublishKeepsTheLatestPath(t *testing.T) {
-	h := &Host{h: newHost(t), done: make(chan struct{})}
+	h := wrap(newHost(t))
 	defer h.Close()
 
 	id := newHost(t).ID()

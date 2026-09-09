@@ -31,6 +31,7 @@ import (
 	"github.com/achmadss/p2p-transport/internal/identity"
 	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -65,10 +66,14 @@ type Host struct {
 	mu    sync.Mutex
 	onLAN []func(PeerID, []string)
 
-	// done closes on Close and stops the background work: measuring this
-	// machine's public addresses, and retrying a peer that is relayed or
-	// gone. Without it those goroutines outlive the host.
-	done      chan struct{}
+	// ctx is cancelled by Close, and is the parent of every dial the
+	// background work makes: measuring this machine's public addresses,
+	// holding the relays, and chasing a peer that is relayed or gone. A
+	// dial rooted in Background instead goes on for its whole timeout
+	// after the host has gone, which is what a leak on shutdown looks
+	// like.
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeOnce sync.Once
 
 	// working holds the peers repair is already running for, so a second
@@ -183,20 +188,21 @@ func New(cfg Config) (*Host, error) {
 			circuits = append(circuits, a)
 		}
 	}
-	t := &Host{h: h, done: make(chan struct{}), circuits: circuits}
+	t := wrap(h)
+	t.circuits = circuits
 	t.watchForRelayed()
 	// Both exist to get off a relay, so neither runs without one. With
 	// no relay there is no relayed connection to escape and no reason to
 	// ask eight reflectors every 27 seconds for the life of the process.
 	if len(infos) > 0 {
-		go holdRelays(h, infos, &observed)
+		go t.holdRelays(infos, &observed)
 		go t.refreshMeasured(mine, &measured)
 	}
 	if !cfg.NoLAN {
 		lan, err := discovery.Start(h, t.found)
 		if err != nil {
 			// t.Close, not h.Close: the refresher and the relay dialler
-			// are already running and watch t.done, so closing only the
+			// are already running on t.ctx, so closing only the
 			// host leaves them asking reflectors for the life of the
 			// process.
 			t.Close()
@@ -206,6 +212,15 @@ func New(cfg Config) (*Host, error) {
 	}
 	t.diagnose()
 	return t, nil
+}
+
+// wrap builds a Host around a started libp2p host. Everything that has
+// to stop on Close hangs off ctx, so background work cannot be added
+// without a parent that stops it.
+func wrap(h host.Host) *Host {
+	t := &Host{h: h}
+	t.ctx, t.cancel = context.WithCancel(context.Background())
+	return t
 }
 
 // found passes one discovery answer to every OnLAN callback.
@@ -236,34 +251,87 @@ func (t *Host) refreshMeasured(mine *socketRef, measured *atomic.Value) {
 			measured.Store(out)
 		}
 		select {
-		case <-t.done:
+		case <-t.ctx.Done():
 			return
 		case <-time.After(endpointsFresh):
 		}
 	}
 }
 
-// holdRelays dials every configured relay at startup and asks each one
-// what address it sees.
+// holdRelays dials every configured relay and asks each one what address
+// it sees, at startup and again whenever this machine's addresses change.
 //
 // It breaks a circle: AutoRelay reserves only after AutoNAT rules this
 // machine unreachable, AutoNAT needs a peer to ask, and an idle machine
 // has none. The relay is that peer, the host to reserve with, and the
 // observer of this machine's public address all at once.
 //
-// One attempt each, in the background: a relay that is down means
-// running without one, not failing to start. A machine that changes
-// network keeps the old address until it restarts.
-// ponytail: re-ask on EvtLocalAddressesUpdated when roaming matters.
-func holdRelays(h host.Host, relays []peer.AddrInfo, observed *atomic.Value) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// It re-runs on an address change because a machine that moves from
+// Wi-Fi to a cable, or wakes on a different network, has a new address
+// to be observed at and, if the move dropped the relay connection, no
+// reservation left to be reached through. Neither is recovered by the
+// dial made at startup.
+//
+// It re-runs on relayRetry as well, because a relay that restarts is a
+// change to nothing on this machine and so raises no event here. A round
+// costs one dial and a kilobyte per relay, and it is what puts a pair
+// back in touch after the machine between them was rebooted.
+func (t *Host) holdRelays(relays []peer.AddrInfo, observed *atomic.Value) {
+	tick := time.NewTicker(relayRetry)
+	defer tick.Stop()
+
+	// Which relays have already been reported unreachable, so an outage
+	// costs two lines rather than one a minute for as long as it lasts.
+	down := map[peer.ID]bool{}
+
+	// A nil channel blocks forever, so a subscription that could not be
+	// made costs the address-change round and leaves the timed one.
+	var changed <-chan interface{}
+	if sub, err := t.h.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated)); err == nil {
+		defer sub.Close()
+		changed = sub.Out()
+	}
+	for {
+		t.dialRelays(relays, observed, down)
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-tick.C:
+		case _, ok := <-changed:
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+// relayRetry is how often a relay is dialled again when nothing has
+// changed. Slower than a peer is chased on purpose: a relay that
+// restarts is back within seconds, and one that is gone for good should
+// cost a dial a minute rather than a dial every five seconds for the
+// life of the process.
+const relayRetry = time.Minute
+
+// dialRelays connects to each relay once and stores the address it
+// reports, marking in down which ones did not answer. One attempt each,
+// in the background: a relay that is down means running without one, not
+// failing to start, and the next round comes soon enough.
+func (t *Host) dialRelays(relays []peer.AddrInfo, observed *atomic.Value, down map[peer.ID]bool) {
+	ctx, cancel := context.WithTimeout(t.ctx, 30*time.Second)
 	defer cancel()
 	for _, r := range relays {
-		if err := h.Connect(ctx, r); err != nil {
-			fmt.Fprintf(os.Stderr, "relay %s unreachable: %v\n", r.ID, err)
+		if err := t.h.Connect(ctx, r); err != nil {
+			if !down[r.ID] {
+				fmt.Fprintf(os.Stderr, "relay %s unreachable: %v\n", r.ID, err)
+				down[r.ID] = true
+			}
 			continue
 		}
-		if a, ok := askObserved(ctx, h, r.ID); ok {
+		if down[r.ID] {
+			fmt.Fprintf(os.Stderr, "relay %s is back\n", r.ID)
+			down[r.ID] = false
+		}
+		if a, ok := askObserved(ctx, t.h, r.ID); ok {
 			observed.Store([]multiaddr.Multiaddr{a})
 		}
 	}
@@ -489,16 +557,20 @@ func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 // Close stops everything this host started. Calling it twice is safe,
 // which matters because an error path can close a host that a defer
 // will close again.
+//
+// The background work stops before the host does, not after. Closing the
+// host disconnects every peer, and each of those disconnections is an
+// event that would otherwise start a fresh chase for a peer on a
+// transport that is going away.
 func (t *Host) Close() error {
-	err := t.h.Close()
 	t.closeOnce.Do(func() {
-		close(t.done)
+		t.cancel()
 		if t.lan != nil {
 			t.lan.Close()
 		}
 		t.closeWatchers()
 	})
-	return err
+	return t.h.Close()
 }
 
 func transportOf(a multiaddr.Multiaddr) string {

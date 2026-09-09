@@ -80,6 +80,12 @@ func (t *Host) repair(id peer.ID) Path {
 	if p != PathRelay && p != PathUnknown {
 		return p
 	}
+	// Closing the host disconnects every peer, and each of those events
+	// arrives here. Without this the last act of a shutdown is to start
+	// a chase for every peer it has just dropped.
+	if t.ctx.Err() != nil {
+		return p
+	}
 	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
 		return p
 	}
@@ -87,7 +93,7 @@ func (t *Host) repair(id peer.ID) Path {
 		defer t.working.Delete(id)
 		for {
 			select {
-			case <-t.done:
+			case <-t.ctx.Done():
 				return
 			default:
 			}
@@ -130,7 +136,7 @@ func (t *Host) restore(id peer.ID) bool {
 		}
 		t.redial(id)
 		select {
-		case <-t.done:
+		case <-t.ctx.Done():
 			return false
 		case <-deadline:
 			if os.Getenv("RATATOSKR_DIAG") != "" {
@@ -149,7 +155,7 @@ func (t *Host) restore(id peer.ID) bool {
 // relay, which is the only option left.
 func (t *Host) redial(id peer.ID) {
 	if direct := directOnly(t.h.Peerstore().Addrs(id)); len(direct) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
+		ctx, cancel := context.WithTimeout(t.ctx, upgradeDial)
 		err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: direct})
 		cancel()
 		if err == nil {
@@ -159,7 +165,7 @@ func (t *Host) redial(id peer.ID) {
 	if len(t.circuits) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
+	ctx, cancel := context.WithTimeout(t.ctx, upgradeDial)
 	defer cancel()
 	if err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: t.circuits}); err != nil {
 		if os.Getenv("RATATOSKR_DIAG") != "" {
@@ -177,7 +183,7 @@ func (t *Host) upgrade(id peer.ID) {
 	start := time.Now()
 	for {
 		select {
-		case <-t.done:
+		case <-t.ctx.Done():
 			return
 		case <-tick.C:
 		}
@@ -215,7 +221,7 @@ func (t *Host) upgrade(id peer.ID) {
 // answers "already connected" and hands back the relayed connection,
 // which is the thing being escaped.
 func (t *Host) dialDirect(id peer.ID) {
-	ask, cancelAsk := context.WithTimeout(context.Background(), upgradeDial)
+	ask, cancelAsk := context.WithTimeout(t.ctx, upgradeDial)
 	defer cancelAsk()
 
 	direct := directOnly(t.h.Peerstore().Addrs(id))
@@ -228,7 +234,7 @@ func (t *Host) dialDirect(id peer.ID) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
+	ctx, cancel := context.WithTimeout(t.ctx, upgradeDial)
 	defer cancel()
 	err := t.h.Connect(network.WithForceDirectDial(ctx, "upgrade"), peer.AddrInfo{ID: id, Addrs: direct})
 	if err != nil && os.Getenv("RATATOSKR_DIAG") != "" {

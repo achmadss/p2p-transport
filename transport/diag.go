@@ -40,7 +40,7 @@ func (t *Host) diagnose() {
 		defer sub.Close()
 		for {
 			select {
-			case <-t.done:
+			case <-t.ctx.Done():
 				return
 			case e, ok := <-sub.Out():
 				if !ok {
@@ -62,7 +62,7 @@ func (t *Host) diagnose() {
 		defer tick.Stop()
 		for {
 			select {
-			case <-t.done:
+			case <-t.ctx.Done():
 				return
 			case <-tick.C:
 				t.printAddrs()
