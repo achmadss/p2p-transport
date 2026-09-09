@@ -811,3 +811,56 @@ that gets published. The rest of that paragraph — that the port advances
 with time, holds once advanced, and advances by one — was read from a
 carrier that turned out to renumber per destination, and the sections
 above retract it.
+
+### Built 9 Sep 2026: the LAN rung, which libp2p had quietly removed
+
+Two machines on one LAN that meet over heimdall could not upgrade to
+the LAN. Not "usually did not" — could not, structurally, and the
+reason is one function in a dependency.
+
+go-libp2p's identify filters the addresses a peer tells it *on the
+receiving side*, by the address of the connection that carried them
+(`p2p/protocol/identify/id.go`, `filterAddrs`, called from
+`consumeMessage`). The rule is: a public connection may only teach you
+public addresses. A circuit multiaddr through a relay on a VPS begins
+with the VPS's public IP, and `manet.IsPublicAddr` reads exactly that,
+so a relayed connection is a public one and every `192.168.x.x` the
+far end offered is dropped before it reaches the peerstore. DCUtR
+declines the same addresses one layer up: `holepuncher.go` only ever
+direct-dials a peerstore address it considers public.
+
+So the peerstore of a relayed peer holds precisely the addresses that
+need a hole punched through a carrier, and never the one address that
+needs nothing at all. `dialDirect` was reading that peerstore. The LAN
+rung existed in the design and in none of the dials.
+
+The fix is a peer asking a peer instead of asking libp2p:
+`/ratatoskr/addrs/1.0.0` answers with `host.Addrs()`, circuits removed,
+one per line, and `askAddrs` reads it on every tick of the upgrade loop
+— every tick rather than once, because the far end re-measures its
+public address on the 27-second clock and a laptop that changes network
+changes its LAN address too. It is a kilobyte over a relay, which
+`PLAN.md` §7 already counts as free; only bulk transfer cares about the
+path.
+
+**The ladder is raced, not walked.** The rungs are the LAN, then the
+Internet, then the relay already underneath — and `dialDirect` hands
+all of them to one `Connect` rather than trying them in turn. libp2p's
+dial ranker groups candidates into private, public and relay and starts
+the first two together (`swarm/dial_ranker.go`), and `directOnly` has
+already removed the third. A LAN dial completes in a millisecond or
+two; a punch across the Internet is still waiting on its first round
+trip. The lowest rung that exists wins on latency alone, and walking
+the ladder would only add five seconds to the common case, where the
+private address the peer advertises belongs to a network this machine
+is not on and will time out.
+
+One thing this does not do: if a public dial somehow lands first — two
+machines on one LAN would need a router that hairpins — the loop stops
+there and the LAN path is never tried again. Worth an hour only if a
+measurement finds it.
+
+Unmeasured, like everything else built in this section. The test is in
+`TODO.md` step 3: two machines on one LAN, `--via relay`, and the
+second pass must run over a private address with heimdall's counters
+flat.

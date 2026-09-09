@@ -111,6 +111,12 @@ choice. Do it before anything depends on the answer.
 - [ ] Retry the punch for as long as a peer is relayed, from both ends.
       Built; unmeasured on the hotspot, which is the only test that
       has ever been able to fail
+- [ ] Test: two machines on one LAN that meet over the relay upgrade to
+      the LAN, not to the Internet. `/ratatoskr/addrs/1.0.0` exists for
+      this: identify drops every private address it is told over a
+      public connection, and a circuit through heimdall is a public
+      connection, so libp2p alone never tells either machine the
+      other's LAN address. Built 9 Sep 2026, unmeasured.
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
@@ -133,7 +139,11 @@ directly exactly once, at 251 ms, on an agent seconds old. The carrier
 hands each new destination its own port, so no address a third party
 observes names the door a peer must dial — which is why the agent now
 publishes a set of addresses re-measured every 27 seconds and re-dials a
-relayed peer every five seconds for as long as it stays relayed.
+relayed peer every five seconds for as long as it stays relayed. Each
+retry races the whole ladder rather than walking it — LAN, Internet,
+and the relay already underneath — because the LAN dial finishes before
+a punch has had its first round trip, so the lowest rung that exists
+wins without being sequenced.
 
 **Check:** two machines on different networks connect, and the numbers
 exist on paper. If throughput or punch rate is bad, stop and reconsider

@@ -1,15 +1,20 @@
 package transport
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/achmadss/p2p-transport/internal/identity"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // Turning a relayed connection into a direct one, and keeping on trying.
@@ -98,28 +103,92 @@ func (t *Host) upgrade(id peer.ID) {
 	}
 }
 
-// dialDirect tries every address the far end has published that is not a
-// circuit.
+// dialDirect tries every address the far end can be reached at, lowest
+// rung first.
 //
-// The addresses come from the peerstore, which identify fills over the
-// relayed connection and refills whenever the far end's address set
-// changes — and it changes every time their refresher measures, which is
-// the whole reason the measuring was moved onto a clock. So this dials
-// what the peer believes right now, not what it believed when the
-// relayed connection opened.
+// The rungs are the LAN, then the Internet, then the relay that is
+// already carrying the session — and they are raced rather than walked,
+// because racing arrives at the same answer sooner. libp2p's dial ranker
+// groups the candidates into private, public and relay and starts the
+// first two together; the LAN dial completes in a millisecond or two
+// while a punch across the Internet is still waiting on its first round
+// trip, so the lower rung wins whenever it exists at all. The relay rung
+// needs no dialling: it is the connection this loop is running on, and
+// it keeps carrying the session until something better lands beside it.
+//
+// The candidates come from two places because neither is complete. The
+// peerstore has whatever identify and mDNS put there, which over a
+// relayed connection is public addresses only. AddrsProto asks the peer
+// itself and gets the rest — its LAN address above all. Circuit
+// addresses are dropped from both: a relay cannot be the answer to how
+// to stop using a relay.
 //
 // The dial is forced past the connection that already exists: without
 // that, libp2p answers "already connected" and returns the relayed
 // connection, which is the thing being escaped.
 func (t *Host) dialDirect(id peer.ID) {
+	ask, cancelAsk := context.WithTimeout(context.Background(), upgradeDial)
+	defer cancelAsk()
+
 	direct := directOnly(t.h.Peerstore().Addrs(id))
+	for _, a := range t.askAddrs(ask, id) {
+		if !has(direct, a) {
+			direct = append(direct, a)
+		}
+	}
 	if len(direct) == 0 {
 		return
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
 	defer cancel()
 	err := t.h.Connect(network.WithForceDirectDial(ctx, "upgrade"), peer.AddrInfo{ID: id, Addrs: direct})
 	if err != nil && os.Getenv("RATATOSKR_DIAG") != "" {
-		fmt.Fprintf(os.Stderr, "punch at %s missed: %v\n", identity.Short(id.String()), err)
+		fmt.Fprintf(os.Stderr, "punch at %s missed on %d addresses: %v\n",
+			identity.Short(id.String()), len(direct), err)
 	}
+}
+
+// HandleAddrs answers AddrsProto with this machine's own addresses, one
+// per line. Circuits are stripped here as well as on the reading side,
+// because a peer should not have to filter what it was never owed.
+func HandleAddrs(h host.Host) {
+	h.SetStreamHandler(AddrsProto, func(s network.Stream) {
+		defer s.Close()
+		s.SetDeadline(time.Now().Add(10 * time.Second))
+		for _, a := range directOnly(h.Addrs()) {
+			fmt.Fprintln(s, a)
+		}
+	})
+}
+
+// askAddrs reads the far end's own view of where it can be reached.
+//
+// Asked every tick rather than once, because the answer moves: the far
+// end re-measures its public address on the endpointsFresh clock, and a
+// laptop that changes network changes its LAN address too. It is a
+// kilobyte over a relayed connection, which PLAN.md §7 already counts as
+// free — only bulk transfer cares which path it took.
+//
+// Silence is not an error worth reporting. A peer too old to know this
+// protocol, or a relay too slow to answer within the tick, leaves the
+// peerstore's addresses to be dialled on their own.
+func (t *Host) askAddrs(ctx context.Context, id peer.ID) []multiaddr.Multiaddr {
+	s, err := t.Open(ctx, id, AddrsProto)
+	if err != nil {
+		return nil
+	}
+	defer s.Close()
+	if d, ok := ctx.Deadline(); ok {
+		s.SetDeadline(d)
+	}
+	var out []multiaddr.Multiaddr
+	lines := bufio.NewScanner(io.LimitReader(s, 8<<10))
+	for lines.Scan() {
+		a, err := multiaddr.NewMultiaddr(strings.TrimSpace(lines.Text()))
+		if err == nil {
+			out = append(out, a)
+		}
+	}
+	return directOnly(out)
 }

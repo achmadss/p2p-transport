@@ -89,3 +89,34 @@ func swap[T any](p *T, v T) func() {
 	*p = v
 	return func() { *p = old }
 }
+
+// TestAskAddrsCarriesWhatIdentifyDrops is the reason AddrsProto exists.
+// go-libp2p's identify filters every non-public address out of what it
+// stores when the connection carrying it is public, and a circuit
+// through a relay is public — so over a relay the peerstore holds
+// exactly the addresses that need a hole punched and none of the LAN
+// address that needs nothing at all. This asks the peer directly, so
+// what comes back must be its listen set, private addresses included.
+func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
+	a, b := newHost(t), newHost(t)
+	HandleAddrs(b)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Connect(ctx, peer.AddrInfo{ID: b.ID(), Addrs: b.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &Host{h: a, done: make(chan struct{})}
+	defer h.Close()
+
+	got := h.askAddrs(ctx, b.ID())
+	if len(got) != len(b.Addrs()) {
+		t.Fatalf("asked for %d addresses, got %d: %v", len(b.Addrs()), len(got), got)
+	}
+	for _, want := range b.Addrs() {
+		if !has(got, want) {
+			t.Fatalf("%s was not in the answer: %v", want, got)
+		}
+	}
+}

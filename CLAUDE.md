@@ -250,6 +250,16 @@ the change because it reads the live connections. This is Tailscale's
 shape, not DCUtR's: DCUtR still runs, tries three times at connection
 time, and whichever of the two lands first ends both.
 
+Each retry races the whole ladder — LAN, then the Internet, then the
+relay it is already running on — rather than walking it, because the
+LAN dial finishes in a millisecond or two while a punch is still on its
+first round trip, so the lowest rung that exists wins on its own. The
+LAN rung needs `/ratatoskr/addrs/1.0.0` to exist at all: identify drops
+every private address it is told over a public connection, and a
+circuit through a relay on a VPS is a public connection, so two
+machines on one LAN that meet over heimdall are never told each other's
+LAN address by libp2p. `askAddrs` asks the peer directly each tick.
+
 **Presence and path are different questions.** Presence comes from mimir
 before connecting (`online`/`offline`/`unknown`). The path (`lan`/
 `direct`/`relay`) is measured from the real connection afterwards, and

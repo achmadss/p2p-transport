@@ -58,6 +58,18 @@ const BenchProto = protocol.ID("/ratatoskr/bench/1.0.0")
 // use, and on any other kind no single address exists to be found.
 const ObservedProto = protocol.ID("/ratatoskr/observed/1.0.0")
 
+// AddrsProto asks a peer where it is listening, in its own words.
+//
+// identify already carries this and the receiving side throws half of
+// it away: it drops every non-public address when the connection they
+// arrived on is public, and a circuit through a relay on a VPS is a
+// public address (go-libp2p `identify.filterAddrs`). So two machines on
+// one LAN that meet over heimdall are never told each other's LAN
+// address — the one dial certain to succeed is the one dial never
+// tried. DCUtR does not rescue it either; it only ever direct-dials
+// addresses it considers public.
+const AddrsProto = protocol.ID("/ratatoskr/addrs/1.0.0")
+
 // Path is how a session reached the far end. It is measured from a live
 // connection, never guessed. PLAN.md §14.
 type Path string
@@ -181,6 +193,7 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
 	HandleObserved(h)
+	HandleAddrs(h)
 	t := &Host{h: h, done: make(chan struct{})}
 	t.watchForRelayed()
 	// Both of these exist to get off a relay, so neither runs without
