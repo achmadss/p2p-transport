@@ -495,24 +495,13 @@ other.
 
 ## 11. Build order
 
-| Step | Goal | Passes when |
-|------|------|-------------|
-| 0 | libp2p echo, addresses pasted by hand | a string echoes over a stream |
-| 1 | Identity and config | `ratatoskr id` is stable across restarts on all three OSes |
-| 2 | mDNS discovery, LAN dial | `discover` finds the other machine and connects with no server |
-| 3 | **NAT spike**: relay, punching, throughput | two machines on different networks connect directly; the rate and MB/s are written down |
-| 4 | **The seam**: the surface of §2.1, public | a consumer package compiles against it without importing libp2p |
-| 5 | Path changes are pushed, not polled | a transfer moves to a better path without asking every four megabytes |
-| 6 | Survival | sleep, wake, network change, cable pull, restart — reconnects, never hangs, leaks no goroutines |
-| 7 | **The relay fleet** (`FLEET.md`) | a relay is killed mid-transfer and the pair lands on another; a subject's rate divides by demand across its machines wherever they are placed, and follows a limit changed while it runs |
-| 8 | Windows and Linux | every check above passes on all three, firewall prompts documented |
-| 9 | Freeze and tag | v1.0.0, a README for the consumer, one worked example |
+`TODO.md` is the build order: step 0 to step 9, each with the check that
+passes it and what was measured getting there. It is not repeated here,
+because a second copy is a copy that goes stale, and this one had.
 
-Steps 0 to 3 are done. Step 3 was the one that could have failed.
-
-The order is the risk order. Step 3 came fourth because it is where the
-libp2p choice was proved or disproved, and nothing above it should have
-been built on an unmeasured assumption about throughput.
+The order is the risk order. Step 3, the NAT spike, came fourth because
+it is where the libp2p choice was proved or disproved, and nothing above
+it should have been built on an unmeasured assumption about throughput.
 
 ---
 
@@ -547,9 +536,6 @@ this module's dependency tree whole.
 
 ## 14. What the consumer builds
 
-Not here, and named so nobody adds them here by accident: files and
-folders, a file protocol, WebDAV or any other adapter, accounts and
-device registries, authorisation policy, resume state and integrity
-hashes, any user interface.
-
-`SPEC.md` §11 is the same list, from the requirement's side.
+`SPEC.md` §11 is the list, from the requirement's side: files and
+folders, a file protocol, accounts, authorisation policy, resume state,
+any user interface. None of it belongs here.
