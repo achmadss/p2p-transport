@@ -61,6 +61,12 @@ for the fraction of pairs that cannot punch through their networks, and
 must work correctly and be reported honestly. What is forbidden is
 relaying being *normal*.
 
+The relays are fleet infrastructure and belong to layer 4: how many
+exist, where a peer is placed, and how much bandwidth it may use are all
+questions this repository answers. It answers them about **subjects** —
+opaque identifiers carrying a minimum and a maximum rate — never about
+accounts. Who owns a subject is §11's business, and stays out.
+
 ---
 
 ## 3. What the caller gets

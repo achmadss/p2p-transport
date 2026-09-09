@@ -23,6 +23,7 @@ and a package:
 |------|------|
 | `transport` | The package. The surface an application uses. `internal/` today; public at step 4. |
 | `heimdall` | A relay node. Forwards encrypted bytes it cannot read. |
+| `bifrost` | The relay coordinator: places, meters and scales the fleet. Designed in `FLEET.md`, not built. |
 | `ratatoskr` | The test harness — `id`, `run`, `discover`, `connect`, `bench`, NAT diagnostics. Not a product. |
 
 The Norse names are on the wire already, in protocol identifiers like
@@ -37,11 +38,16 @@ The Norse names are on the wire already, in protocol identifiers like
 - **`TODO.md`** — the ordered work, step 0 to step 9, each with a
   concrete pass/fail check. Steps, not findings: what was measured on
   the way lives beside it.
-- **`NAT.md`** — the step 3 notebook: every measurement taken while
-  finding out whether two machines can reach each other directly, and
-  the three readings that turned out to be wrong on the way. Read it
-  before proposing anything about hole punching; it is where the ideas
-  that already failed are recorded.
+- **`FLEET.md`** — the relay fleet: many relays, a coordinator that
+  places and meters them, per-subject bandwidth, and autoscaling. Read
+  it before touching `cmd/heimdall`.
+
+The step 3 notebook, `NAT.md`, was deleted on 9 Sep 2026. It held every
+measurement taken while finding out whether two machines can reach each
+other directly and the three readings that turned out to be wrong on the
+way. The operative conclusions survive in `PLAN.md` §3.5, §5.2 and §6
+and below; the narrative is in `git log` and is worth reading before
+proposing anything new about hole punching.
 
 The scope narrowed on 9 Sep 2026. These documents used to specify a
 whole product — WebDAV, a coordinator with accounts, thumbnails, a web
@@ -89,10 +95,9 @@ is missing.** For most of this step it did not: the carrier tested gives
 every new destination an unrelated port, so no address a third party
 observes names the door a peer must dial, and every aim tried failed. On
 9 Sep 2026 the owner's runs passed, hotspot to home line included,
-without the output being captured. `NAT.md` records that as a verdict
-rather than a measurement, and says so — re-measure before building on a
-rate, because unrecorded readings are what every retraction in that file
-has in common.
+without the output being captured. That is a verdict rather than a
+measurement — re-measure before building on a rate, because unrecorded
+readings are what every retraction in the old notebook had in common.
 
 What was built in between, and is all in place: a *set* of addresses
 re-measured every 27 seconds rather than one taken at startup, a punch
@@ -102,6 +107,16 @@ address identify discards over a public connection, and a transfer that
 moves itself onto a better path while it is still running. The relay
 remains the fallback and carrying real data over it is not a failure:
 `SPEC.md` §2 permits it, and only forbids it being the *normal* path.
+
+**Step 7 is designed and not built.** `FLEET.md` replaces the single
+relay named in `config.json` with a fleet: ephemeral relays, a
+coordinator that places and meters them, bandwidth divided per *subject*
+across that subject's actively transferring machines, and autoscaling
+between a minimum and a maximum VPS count. Two things in it are easy to
+get wrong and are written down for that reason — a subject's machines
+must all land on the same relay or nothing can enforce its aggregate,
+and go-libp2p's relay has no per-connection rate hook, so the shaper
+needs a vendored copy of the hop.
 
 **Step 4 is next, and it is the seam.** `internal/transport` becomes
 `transport`; `PeerID`, `Path` and `Stream` become this package's own
@@ -210,10 +225,13 @@ is a design change, not a refactor.
   you control is wrong here.
 - **Nothing above layer 4 gets added.** No file verbs, no path handling,
   no WebDAV, no accounts, no authorisation policy, no UI. If a change
-  needs one of those, it belongs in the consumer. `SPEC.md` §11.
+  needs one of those, it belongs in the consumer. `SPEC.md` §11. The
+  fleet is the near miss: relays, placement and bandwidth *are* layer 4,
+  and they are expressed against opaque subject ids so that accounts
+  stay out.
 - **Every performance claim is a number someone measured**, with its
-  date and the machines, in `NAT.md`. A verdict is not a measurement,
-  and the file records what happened the three times that was forgotten.
+  date and the machines it was taken on. A verdict is not a measurement.
+  This was forgotten three times and retracted three times.
 - **The build order is the risk order.** Do not skip ahead.
 
 ## Architecture, in the parts that span files

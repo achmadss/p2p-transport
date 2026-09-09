@@ -3,8 +3,8 @@
 Module path: `github.com/achmadss/p2p-transport`
 
 `SPEC.md` is the requirement. This is the design that satisfies it.
-`TODO.md` is the ordered work. `NAT.md` is the notebook from the step
-that could have failed.
+`TODO.md` is the ordered work. `FLEET.md` is the design of the relay
+fleet that `PLAN.md` §8 only sketches.
 
 ---
 
@@ -273,8 +273,8 @@ socket that actually punches, is never older than 27 seconds, and is a
 
 It is still not proof. The port toward a peer is not necessarily the
 port toward a reflector, which is why the punch is retried rather than
-aimed once. `NAT.md` records why, and records three earlier readings
-that turned out to be wrong.
+aimed once. Three earlier readings of this said otherwise and were
+wrong; the notebook that recorded them is in git history.
 
 ### 5.3 A LAN session stays on the LAN
 
@@ -397,6 +397,14 @@ Two traps this cost real time. libp2p marks a relayed connection
 `host.Addrs()` on loopback, so `run` prints the peer id to copy rather
 than an address it cannot promise.
 
+**One relay named in a file is the development shape, not the deployed
+one.** `FLEET.md` is the design that replaces it: many relays with
+ephemeral addresses, a coordinator called `bifrost` that places and
+meters them, bandwidth divided per subject rather than per machine, and
+a VPS count that follows committed demand. It changes nothing in §2.1 —
+the application above still hands the transport opaque strings and never
+learns what a relay is.
+
 ---
 
 ## 9. Build and platform rules
@@ -422,15 +430,18 @@ it through the module.
 p2p-transport/
 ├── cmd/
 │   ├── ratatoskr/     test harness and diagnostics
-│   └── heimdall/      relay node
+│   ├── heimdall/      relay node
+│   └── bifrost/       the coordinator — FLEET.md
 ├── internal/
 │   ├── transport/     the host, the ladder, self-address measurement
 │   ├── discovery/     mDNS
 │   ├── identity/      keypair, peer id
 │   ├── config/        per-OS paths, environment overrides, relays
-│   └── stun/          address reflectors
+│   ├── stun/          address reflectors
+│   ├── relay/         the vendored hop, with a per-subject shaper
+│   └── provision/     one adapter per VPS provider
 ├── scripts/           punch experiments with no libp2p in them
-├── Makefile · SPEC.md · PLAN.md · TODO.md · NAT.md · go.mod
+├── Makefile · SPEC.md · PLAN.md · TODO.md · FLEET.md · go.mod
 ```
 
 `transport` is `internal/` today because nothing outside the module
@@ -455,12 +466,11 @@ other.
 | 4 | **The seam**: the surface of §2.1, public | a consumer package compiles against it without importing libp2p |
 | 5 | Path changes are pushed, not polled | a transfer moves to a better path without asking every four megabytes |
 | 6 | Survival | sleep, wake, network change, cable pull, restart — reconnects, never hangs, leaks no goroutines |
-| 7 | heimdall in production | reservations, limits and metering hold under a real relayed transfer |
+| 7 | **The relay fleet** (`FLEET.md`) | a relay is killed mid-transfer and the pair lands on another; a subject's share divides across its active machines and follows a limit changed while it runs |
 | 8 | Windows and Linux | every check above passes on all three, firewall prompts documented |
 | 9 | Freeze and tag | v1.0.0, a README for the consumer, one worked example |
 
-Steps 0 to 3 are done. Step 3 was the one that could have failed, and
-`NAT.md` is its notebook.
+Steps 0 to 3 are done. Step 3 was the one that could have failed.
 
 The order is the risk order. Step 3 came fourth because it is where the
 libp2p choice was proved or disproved, and nothing above it should have
