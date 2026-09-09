@@ -1,5 +1,9 @@
-// Command ratatoskr is both the agent and the client. One keypair, one
-// peer id, both roles.
+// Command ratatoskr exercises and diagnoses the transport. One keypair,
+// one machine id, serving and connecting from the same binary.
+//
+// It is a test harness, not a product: it is also the first consumer of
+// the transport package, so every command below goes through the
+// exported surface and nothing else.
 package main
 
 import (
@@ -20,8 +24,8 @@ import (
 	"github.com/achmadss/p2p-transport/transport"
 )
 
-// The harness registers its own protocols, the way any application
-// does: a name it picked, and no framing but its own. PLAN.md §3.3.
+// Protocols the harness registers, the way any application does: names
+// it picked, with no framing but its own.
 const (
 	echoProto  = "/ratatoskr/echo/1.0.0"
 	benchProto = "/ratatoskr/bench/1.0.0"
@@ -31,21 +35,18 @@ const version = "0.0.1"
 
 // Defaults for the timings. Every one is overridable; see usage below.
 //
-//	lanTimeout    how long a command waits for mDNS. Answers arrive in
-//	              milliseconds on a working network; this is giving up.
-//	lanHeadStart  how long --via auto waits for the LAN before trying
-//	              the relay. PLAN.md §5.
-//	dialTimeout   the whole attempt. A relayed dial has a reservation
-//	              and a hole punch to get through first.
+//	lanTimeout    how long to wait for the local network. Answers come
+//	              in milliseconds; this is giving up.
+//	lanHeadStart  how long --via auto waits for the local network
+//	              before trying the relay.
+//	dialTimeout   the whole connect attempt.
 //	benchTimeout  a whole measurement, which moves real bytes.
-//	punchWindow   how long `bench` watches a relayed connection for an
-//	              upgrade to a direct one before it stops watching. It
-//	              bounds the reporting, not the punching: the transport
-//	              goes on retrying for the life of the session either
-//	              way. Longer than it looks it needs to be, because the
-//	              address set a punch aims at is re-measured every 27
-//	              seconds and a shorter window would report nothing
-//	              where the next attempt had something.
+//	punchWindow   how long bench watches a relayed connection for a
+//	              direct one to open. It bounds the reporting only; the
+//	              transport keeps retrying either way. Longer than it
+//	              looks it needs to be, because the addresses aimed at
+//	              are re-measured every 27 seconds and a shorter window
+//	              reports nothing where the next attempt had something.
 var (
 	lanTimeout   = config.Duration("RATATOSKR_LAN_TIMEOUT", 3*time.Second)
 	lanHeadStart = config.Duration("RATATOSKR_LAN_HEAD_START", 400*time.Millisecond)
@@ -146,9 +147,8 @@ environment (empty means the default):
 `)
 }
 
-// showID prints the short fingerprint by default. The full peer id is
-// long and nobody reads it correctly; it belongs in diagnostics, which
-// is what --full is. SPEC.md §4.
+// showID prints the short fingerprint by default. The full id is long
+// and nobody reads it correctly, so it is behind --full.
 func showID(full bool) error {
 	id, err := identity.LoadOrCreate("")
 	if err != nil {
@@ -168,7 +168,7 @@ func showID(full bool) error {
 	return nil
 }
 
-// via reads --via. auto is LAN first, then the relay.
+// via reads --via. auto means the local network first, then the relay.
 func via(args []string) string {
 	for i, a := range args {
 		if a == "--via" && i+1 < len(args) {
@@ -179,8 +179,8 @@ func via(args []string) string {
 }
 
 // start brings up this machine's transport with whatever relays its
-// config names. The identity is the transport's business now: it loads
-// or generates the key in the config directory and never hands it out.
+// config names. The identity is the transport's: it loads or generates
+// the key in the config directory and never hands it out.
 func start() (*transport.Host, error) {
 	r, err := relays()
 	if err != nil {
@@ -189,19 +189,14 @@ func start() (*transport.Host, error) {
 	return transport.New(transport.Config{Relays: r})
 }
 
-// relays is where this machine keeps the heimdall nodes it may use:
-// config.json, with RATATOSKR_RELAYS overriding it whole. A relay is a
-// hundred characters of address that does not change between runs, so
-// it is a file rather than something retyped.
+// relays is where this machine keeps the relays it may use: config.json,
+// with RATATOSKR_RELAYS overriding it whole. A relay address is a
+// hundred characters that do not change between runs, so it is a file
+// rather than something retyped.
 //
-// Read once. Three callers want the same answer — the host that dials
-// them, `run` deciding whether to print an id worth reaching from
-// another network, and `dialRelay` refusing a path that was never
-// configured — and reading the file three times to answer one question
-// invites the three to disagree.
-//
-// Nothing above the seam does this. `transport.New` is handed the list
-// in code; where an application keeps it is the application's.
+// Read once, because three callers want the same answer and reading the
+// file three times invites them to disagree. transport.New is handed the
+// list in code; where an application keeps its own is its business.
 var relays = sync.OnceValues(func() ([]string, error) {
 	if env := config.List("RATATOSKR_RELAYS"); len(env) > 0 {
 		return env, nil
@@ -221,12 +216,9 @@ func configured() bool {
 	return len(r) > 0
 }
 
-// lanPeers is what OnLAN has reported so far.
-//
-// The transport pushes; the harness remembers. Keeping the list here
-// rather than below the seam is the point of OnLAN — matching a
-// fingerprint a person typed is the application's question, and layer 4
-// has no business holding a lookup table for it.
+// lanPeers is what OnLAN has reported so far. The transport pushes and
+// the harness remembers: matching a fingerprint a person typed is the
+// application's question, not the transport's.
 type lanPeers struct {
 	mu   sync.Mutex
 	seen map[transport.PeerID][]string
@@ -253,7 +245,7 @@ func (l *lanPeers) all() map[transport.PeerID][]string {
 }
 
 // find waits for a machine whose id or fingerprint matches want. It
-// polls rather than plumbing a channel through every caller; answers
+// polls rather than plumbing a channel through every caller: answers
 // arrive in milliseconds and the caller is a person at a prompt.
 func (l *lanPeers) find(ctx context.Context, want string) (transport.PeerID, []string, error) {
 	tick := time.NewTicker(100 * time.Millisecond)
@@ -272,9 +264,9 @@ func (l *lanPeers) find(ctx context.Context, want string) (transport.PeerID, []s
 	}
 }
 
-// run serves this machine. It answers the echo and benchmark protocols
-// only, which is enough to prove a peer reached us and over which path;
-// an application registers its own.
+// run serves this machine until interrupted. It answers the echo and
+// benchmark protocols only, which is enough to show that a machine
+// reached this one and over which path.
 func run() error {
 	h, err := start()
 	if err != nil {
@@ -313,8 +305,8 @@ func run() error {
 	return nil
 }
 
-// discover lists what is on this network. It needs no server and no
-// Internet: everything here is mDNS on the local link.
+// discover lists the machines on this network. No server and no
+// Internet is involved.
 func discover(full bool) error {
 	h, err := start()
 	if err != nil {
@@ -342,9 +334,8 @@ func discover(full bool) error {
 	return nil
 }
 
-// connect finds a machine on the local network and opens a stream to it.
-// The dial carries no relay address, so a failure here is a real failure
-// rather than a quiet trip through heimdall.
+// connect reaches a machine and echoes a line off it, reporting which
+// path the bytes took.
 func connect(want, path string) error {
 	h, err := start()
 	if err != nil {
@@ -381,10 +372,10 @@ func connect(want, path string) error {
 	return nil
 }
 
-// open picks a path to the far end. LAN gets a head start because a
-// machine on this network should be reached on this network: nothing
-// leaves it, and it is faster. The relay is the fallback, never the
-// first choice. PLAN.md §5.
+// open reaches the far end and returns a stream. The local network gets
+// a head start because a machine here should be reached here: it is
+// faster and nothing leaves the network. The relay is the fallback,
+// never the first choice.
 func open(ctx context.Context, h *transport.Host, lan *lanPeers, want, path, proto string) (transport.Stream, error) {
 	switch path {
 	case "lan", "relay", "auto":
@@ -403,11 +394,9 @@ func open(ctx context.Context, h *transport.Host, lan *lanPeers, want, path, pro
 
 		switch {
 		case err == nil:
-			// Only the addresses this network answered with. Handing
-			// over exactly those is what keeps a session found here
-			// from leaving here — the relay is never in this dial set,
-			// so a failure is a real failure rather than a quiet trip
-			// through heimdall. PLAN.md §5.3.
+			// Only the addresses this network answered with, so the
+			// relay is never in the dial set and a failure here is a
+			// real failure rather than a quiet trip through a relay.
 			dialErr := h.Connect(ctx, id, addrs)
 			if dialErr == nil {
 				return h.Open(ctx, id, proto)
@@ -427,11 +416,10 @@ func open(ctx context.Context, h *transport.Host, lan *lanPeers, want, path, pro
 
 // dialRelay reaches a machine the local network did not answer for.
 //
-// It hands over no addresses at all, which is how a caller says "use
-// whatever you know": the transport falls back to the relays it was
-// configured with. A fingerprint cannot be used here — nothing on this
-// network has offered the full id to match it against, and a relay is
-// given an id rather than asked to search.
+// Passing no addresses is how a caller says "use whatever you know", so
+// the transport falls back to its configured relays. A fingerprint will
+// not do here: nothing has offered the full id to match it against, and
+// a relay is given an id rather than asked to search.
 func dialRelay(ctx context.Context, h *transport.Host, want, proto string) (transport.Stream, error) {
 	if !configured() {
 		return nil, fmt.Errorf("no machine matching %q on this network, and no relay configured", want)
@@ -459,19 +447,17 @@ func size(args []string) int64 {
 	return int64(config.Int("RATATOSKR_BENCH_MB", 100))
 }
 
-// moveCheck is how often a running transfer looks up from sending to
-// ask whether a better path has opened.
-//
-// The check itself is free — it reads the live connections — so this is
-// only the granularity of the move, and it is small on purpose. Four
-// megabytes is a fifth of a second on a LAN and twenty seconds on the
-// worst relay measured, which is the right way round: the slower the
-// path being escaped, the more there is left to move.
+// moveCheck is how often a running transfer asks whether a better path
+// has opened. The check reads live connections and costs nothing, so
+// this is only the granularity of the move. Four megabytes is a fifth of
+// a second on a local network and twenty seconds on a slow relay, which
+// is the right way round: the slower the path being escaped, the more
+// there is left to move.
 const moveCheck = 4 << 20
 
-// bench measures a path and watches for a hole punch. These are the
-// numbers TODO step 3 exists to produce: throughput, and whether a
-// relayed connection becomes a direct one and how long that took.
+// bench measures throughput to a machine, and when the transfer starts
+// out relayed, how long a direct path takes to open and what it then
+// measures on its own.
 func bench(want, path string, mb int64) error {
 	h, err := start()
 	if err != nil {
@@ -527,21 +513,12 @@ func bench(want, path string, mb int64) error {
 // transfer sends the bytes and reports the rate the far end confirms,
 // moving onto a better path if one opens while it is still sending.
 //
-// Nothing migrates. A libp2p stream is bound to the connection it was
-// opened on, and QUIC's own migration moves one connection between
-// local addresses rather than between two connections to two different
-// remote endpoints — the relay and the peer are two endpoints with two
-// handshakes, so there is nothing there to migrate along. What moves is
-// the transfer: every `moveCheck` bytes it asks what the best path to
-// the peer is now, and when that beats the path it is on it finishes
-// the stream it has, opens a new one — which the muxer hands the better
-// connection — and sends the rest there.
-//
-// The check costs a look at the live connections, so a transfer that
-// never has anywhere better to go pays nothing and stays on one stream
-// from start to finish. The granularity is one check interval, and that
-// is less a limitation than a preview: an application that reads in
-// ranges is already one request per range, so it gets this for free.
+// Nothing migrates: a stream is bound to the connection it was opened
+// on. What moves is the transfer. Every moveCheck bytes it asks for the
+// best path now, and when that beats the one it is on it finishes the
+// current stream, opens a new one on the better connection, and sends
+// the rest there. This is the recipe any bulk caller follows, and an
+// application that reads in ranges gets it for free.
 func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id transport.PeerID, mb, total int64) error {
 	start := time.Now()
 	path := s.Path()
@@ -594,9 +571,9 @@ func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id tra
 	return nil
 }
 
-// confirm half-closes a stream and checks the far end counted every
-// byte that went down it. The far end counts to end of stream, so this
-// is also what ends one.
+// confirm half-closes a stream and checks the far end counted every byte
+// that went down it. The far end counts to end of stream, so this is
+// also what ends one.
 func confirm(s transport.Stream, want int64) error {
 	defer s.Close()
 	if err := s.CloseWrite(); err != nil {
@@ -616,13 +593,10 @@ func confirm(s transport.Stream, want int64) error {
 	return nil
 }
 
-// watchUpgrade waits to see whether the relayed connection becomes a
-// direct one, and how long it takes. A punch that never lands is as much
-// a result as one that does.
-//
-// It watches rather than acts: the punching is the transport's, it runs
-// on both ends for as long as the peer is relayed, and it would go on
-// whether or not anybody was measuring it.
+// watchUpgrade waits to see whether a relayed connection is replaced by
+// a direct one, and how long that takes. It only watches: the transport
+// keeps trying for as long as the machine stays relayed, measured or
+// not, and a path that never opens is as much a result as one that does.
 func watchUpgrade(h *transport.Host, id transport.PeerID) transport.Path {
 	start := time.Now()
 	deadline := time.After(punchWindow)
@@ -646,7 +620,7 @@ func watchUpgrade(h *transport.Host, id transport.PeerID) transport.Path {
 	}
 }
 
-// human writes a byte count the way the cap was most likely typed.
+// human writes a byte count the way it was most likely typed.
 func human(n int64) string {
 	for _, u := range []struct {
 		suffix string
@@ -659,8 +633,8 @@ func human(n int64) string {
 	return fmt.Sprintf("%d bytes", n)
 }
 
-// zeros is an endless reader. The bytes are incompressible enough for
-// this: nothing on the path compresses, so their content does not matter.
+// zeros is an endless reader. Nothing on the path compresses, so the
+// content of the bytes does not matter.
 type zeros struct{}
 
 func (zeros) Read(p []byte) (int, error) { return len(p), nil }

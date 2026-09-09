@@ -1,9 +1,9 @@
-// Command heimdall is a libp2p relay node.
+// Command heimdall is a relay node.
 //
-// It forwards a Noise session it holds no key for, so it cannot tell a
-// directory listing from a photograph. What it does unavoidably learn is
-// which peer ids talked, when, and how many bytes — true of any relay,
-// and stated rather than implied. PLAN.md §3.4.
+// It forwards an encrypted session it holds no key for, so it cannot
+// read a byte of what it carries. What it does unavoidably learn is
+// which machines talked, when, and how many bytes — true of any relay,
+// and stated here rather than implied.
 package main
 
 import (
@@ -40,14 +40,11 @@ const (
 	defaultData     = 64 << 30
 	defaultDuration = time.Hour
 
-	// fallbackTCP is the second TCP port heimdall answers on.
-	//
-	// Some networks pass 443 and drop everything else, which is why
-	// Tailscale's DERP relays sit there. A relay nobody on such a
-	// network can reach is a relay that is not a fallback. Binding it
-	// needs root or CAP_NET_BIND_SERVICE; when the process has
-	// neither, that listener simply does not come up and the others
-	// still do, so this costs an unprivileged deploy nothing.
+	// fallbackTCP is the second TCP port heimdall answers on. Some
+	// networks pass 443 and drop everything else, and a relay nobody on
+	// such a network can reach is not a fallback. Binding it needs root
+	// or CAP_NET_BIND_SERVICE; without either, that listener does not
+	// come up and the others still do.
 	fallbackTCP = 443
 )
 
@@ -95,8 +92,8 @@ func run() error {
 	}
 
 	// A relay behind a cloud provider's NAT sees only its private
-	// address, and announcing that would tell every agent to dial an
-	// address that reaches nothing. HEIMDALL_ANNOUNCE is the public one.
+	// address, and announcing that sends every machine at an address
+	// that reaches nothing. HEIMDALL_ANNOUNCE names the public one.
 	if announce := config.List("HEIMDALL_ANNOUNCE"); len(announce) > 0 {
 		addrs, err := toMultiaddrs(announce)
 		if err != nil {
@@ -113,13 +110,12 @@ func run() error {
 	}
 	defer h.Close()
 
-	// libp2p's default circuit allows 128 KB over two minutes, which is
-	// sized for signalling rather than for files. A relayed transfer here
-	// is a whole video, so the limit is raised to something a person
-	// would actually hit.
+	// The default circuit allows 128 KB over two minutes, sized for
+	// signalling rather than for files. A relayed transfer here is a
+	// whole video, so the limit is raised to one a person might reach.
 	//
-	// ponytail: one limit for everyone. Per-peer limits and metering are
-	// step 7, and need an application above with accounts to meter.
+	// ponytail: one limit for everyone. Per-machine limits and metering
+	// come with the relay fleet, and need a coordinator to push them.
 	res := relay.DefaultResources()
 	res.Limit = &relay.RelayLimit{
 		Duration: config.Duration("HEIMDALL_CIRCUIT_DURATION", defaultDuration),
@@ -129,11 +125,10 @@ func run() error {
 		return fmt.Errorf("start relay: %w", err)
 	}
 
-	// An agent behind a NAT that renumbers ports cannot learn its own
+	// A machine whose carrier renumbers ports cannot learn its own
 	// external address from any socket but the one it punches with. This
-	// reports what that socket looks like from here, which is the one
-	// place it can be seen. Reading it costs one round trip and reveals
-	// nothing the relay did not already have to know.
+	// reports what that socket looks like from here, which costs one
+	// round trip and reveals nothing the relay did not already know.
 	wire.HandleObserved(h)
 
 	addrs, err := peer.AddrInfoToP2pAddrs(&peer.AddrInfo{ID: h.ID(), Addrs: h.Addrs()})
@@ -141,8 +136,8 @@ func run() error {
 		return err
 	}
 	// Printing what actually bound is the only way to tell whether 443
-	// came up: a listener that could not bind is not an error here, and
-	// its absence from this list is the report.
+	// came up: failing to bind it is not an error, so its absence from
+	// this list is the report.
 	fmt.Println("heimdall relaying. put one of these in each agent's config.json:")
 	for _, a := range addrs {
 		fmt.Println("  ", a)

@@ -42,8 +42,8 @@ func TestUsableObservedRefusesWhatItCannotPromise(t *testing.T) {
 }
 
 // TestHandleObservedReportsTheDialingSocket is the round trip: the
-// address the server reports must be the port the client actually dialled
-// from, because guessing it from another socket is the bug this replaces.
+// address reported must be the port the client actually dialled from,
+// since the whole point is that another socket cannot answer for it.
 func TestHandleObservedReportsTheDialingSocket(t *testing.T) {
 	server, client := newHost(t), newHost(t)
 	wire.HandleObserved(server)
@@ -91,10 +91,9 @@ func newHost(t *testing.T) host.Host {
 	return h
 }
 
-// TestPunchFilterDropsWhatItCannotRoute pins the rule that cost a whole
-// evening: a machine with no IPv6 must not spend its punch window
-// dialling a peer's IPv6 addresses, and a machine with IPv6 must keep
-// them, because that path has no NAT in it at all.
+// TestPunchFilterDropsWhatItCannotRoute: a machine with no IPv6 must not
+// spend its punch window dialling a peer's IPv6 addresses, and one with
+// IPv6 must keep them, since that path has no NAT in it at all.
 func TestPunchFilterDropsWhatItCannotRoute(t *testing.T) {
 	offered := []multiaddr.Multiaddr{
 		multiaddr.StringCast("/ip4/182.6.161.1/udp/41654/quic-v1"),

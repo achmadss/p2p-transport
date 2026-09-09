@@ -88,15 +88,14 @@ func meetPeer(c *net.UDPConn) (*net.UDPAddr, string, error) {
 	return peer, mapped, nil
 }
 
-// meetInRoom pairs the two machines through a rendezvous instead of an
-// operator.
+// meetInRoom pairs the two machines through a rendezvous rather than an
+// operator carrying an address by hand.
 //
-// Carrying an address by hand is not only slow, it is a variable: a run
-// where the two sides started ninety seconds apart fails the same way as
-// a run where the path was shut, and several evenings were spent telling
-// those two apart. The server names this socket the way a reflector does
-// and hands back the other machine's address as soon as it joins, so
-// both sides begin within one poll of each other.
+// Doing it by hand is a variable, not just slow: two sides that started
+// ninety seconds apart fail exactly like a path that was shut. The
+// rendezvous names this socket the way a reflector does and returns the
+// other machine's address as soon as it joins, so both start within one
+// poll of each other.
 func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, string, error) {
 	at := config.Str("RATATOSKR_PUNCH_RENDEZVOUS", "103.181.143.222:9600")
 	server, err := net.ResolveUDPAddr("udp4", at)
@@ -105,12 +104,12 @@ func meetInRoom(c *net.UDPConn, room string) (*net.UDPAddr, string, error) {
 	}
 	fmt.Printf("waiting in room %q at %s for the other machine.\n", room, server)
 
-	// Who this machine is, for as long as this process lives. Without it
-	// the server can only tell members apart by source address, and a
-	// rerun arrives on a fresh port looking exactly like a second
-	// machine: it pairs at once, punches at its own dead mapping, and
-	// reports nothing arrived. That is the failure being investigated,
-	// manufactured by the tool investigating it.
+	// Who this machine is, for the life of the process. Without it the
+	// rendezvous can only tell members apart by source address, and a
+	// rerun arrives on a fresh port looking like a second machine: it
+	// pairs at once, punches at its own dead mapping, and reports
+	// nothing arrived — the failure being investigated, manufactured by
+	// the tool investigating it.
 	me := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 	hello := []byte(room + " " + me)
 

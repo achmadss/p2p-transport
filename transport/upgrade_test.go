@@ -9,10 +9,9 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// TestUpgradeStopsOnceThePathIsDirect is the loop's only exit that
-// matters. A punch loop that keeps dialling a peer it already reaches
-// directly is a dial every five seconds for the life of the session, on
-// a connection that has nothing left to fix.
+// TestUpgradeStopsOnceThePathIsDirect: a loop that keeps dialling a peer
+// it already reaches directly is a dial every five seconds for the life
+// of the session, on a connection with nothing left to fix.
 func TestUpgradeStopsOnceThePathIsDirect(t *testing.T) {
 	defer swap(&upgradeEvery, 10*time.Millisecond)()
 
@@ -37,8 +36,8 @@ func TestUpgradeStopsOnceThePathIsDirect(t *testing.T) {
 }
 
 // TestUpgradeStopsWhenThePeerIsGone: no connection is not a reason to
-// keep dialling either. The peer's addresses are unknown here, so a loop
-// that did not check would spin on a peerstore that never fills.
+// keep dialling either. The addresses are unknown here, so a loop that
+// did not check would spin on a peerstore that never fills.
 func TestUpgradeStopsWhenThePeerIsGone(t *testing.T) {
 	defer swap(&upgradeEvery, 10*time.Millisecond)()
 
@@ -55,9 +54,9 @@ func TestUpgradeStopsWhenThePeerIsGone(t *testing.T) {
 	}
 }
 
-// TestDirectOnlyDropsCircuits guards the rule both callers share. A
-// circuit address left in the set turns the upgrade dial into a second
-// relayed connection, which would report itself as a successful punch.
+// TestDirectOnlyDropsCircuits: a relay address left in the dial set
+// turns the upgrade into a second relayed connection, which would then
+// report itself as a direct path.
 func TestDirectOnlyDropsCircuits(t *testing.T) {
 	in := addrs(t,
 		"/ip4/203.0.113.7/udp/4242/quic-v1",
@@ -83,20 +82,18 @@ func addrs(t *testing.T, ss ...string) []multiaddr.Multiaddr {
 	return out
 }
 
-// swap sets a package knob for one test and gives back the undo.
+// swap sets a package variable for one test and returns the undo.
 func swap[T any](p *T, v T) func() {
 	old := *p
 	*p = v
 	return func() { *p = old }
 }
 
-// TestAskAddrsCarriesWhatIdentifyDrops is the reason AddrsProto exists.
-// go-libp2p's identify filters every non-public address out of what it
-// stores when the connection carrying it is public, and a circuit
-// through a relay is public — so over a relay the peerstore holds
-// exactly the addresses that need a hole punched and none of the LAN
-// address that needs nothing at all. This asks the peer directly, so
-// what comes back must be its listen set, private addresses included.
+// TestAskAddrsCarriesWhatIdentifyDrops is why AddrsProto exists. libp2p
+// discards every private address it is told over a public connection,
+// and a relay circuit is public, so over a relay the peerstore holds
+// only the addresses needing a punch and none of the local one needing
+// nothing. Asking the peer directly must return its whole listen set.
 func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 	handleAddrs(b)
@@ -122,8 +119,9 @@ func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
 }
 
 // TestPathLadder pins the order a running transfer moves along. Getting
-// it wrong is silent: a transfer would either refuse to leave the relay
-// or leave the LAN for the Internet, and both still deliver the bytes.
+// it wrong is silent: the transfer would either refuse to leave the
+// relay or leave the local network for the Internet, and both still
+// deliver the bytes.
 func TestPathLadder(t *testing.T) {
 	ladder := []Path{PathLAN, PathDirect, PathRelay, PathUnknown}
 	for i, better := range ladder {
@@ -138,18 +136,11 @@ func TestPathLadder(t *testing.T) {
 	}
 }
 
-// TestRepairReadsTheRungNotTheEvent guards the branch both notifee
-// hooks share. A peer already reached directly must start nothing, or
-// every connection would carry a dial every five seconds for its whole
-// life; a peer on the relay climbs; a peer with nothing left is chased
-// back down. The decision has to come from the best path rather than
-// from the connection that fired the event, because the same notifee
-// now runs on connect and disconnect both.
-// TestRepairGivesUpOnAPeerThatIsGone pins the one way the ladder loop
-// can fail to end. It walks both directions now, so an ending it does
-// not recognise is not a stopped goroutine but a spin: restore gives up
-// after restoreFor, the path is still unknown, and a loop that read
-// that as "try again" would dial forever and never release the peer.
+// TestRepairGivesUpOnAPeerThatIsGone pins the one way the loop can fail
+// to end. It walks both directions, so an ending it does not recognise
+// is a spin rather than a stopped goroutine: restore gives up after
+// restoreFor with the path still unknown, and reading that as "try
+// again" would dial forever and never release the peer.
 func TestRepairGivesUpOnAPeerThatIsGone(t *testing.T) {
 	defer swap(&upgradeEvery, 10*time.Millisecond)()
 	defer swap(&restoreFor, 100*time.Millisecond)()
@@ -170,6 +161,12 @@ func TestRepairGivesUpOnAPeerThatIsGone(t *testing.T) {
 	t.Fatal("the ladder loop never released a peer it had given up on")
 }
 
+// TestRepairReadsTheRungNotTheEvent guards the branch both connection
+// hooks share. A peer already reached directly must start nothing, or
+// every connection would carry a dial every five seconds for its whole
+// life. The decision comes from the best live path rather than from the
+// connection that fired the event, since the same hook runs on connect
+// and disconnect both.
 func TestRepairReadsTheRungNotTheEvent(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

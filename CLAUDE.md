@@ -341,9 +341,17 @@ an offset means.
 
 ## Writing style for this repo
 
-Commit messages and docs are prose, not bullet dumps. State what changed
-and why the alternative was rejected. The existing git history is the
-reference.
+Commit messages and the Markdown files are prose, not bullet dumps.
+State what changed and why the alternative was rejected. The existing
+git history is the reference.
+
+**Code comments are the opposite.** They say what the code does and how
+to use it, briefly, and they never cite a document: no `PLAN.md §2.1`,
+no `SPEC.md §4`, no `TODO.md step 7`. A comment that points at a section
+number rots the moment the section moves, and it sends a reader out of
+the file to learn something the comment should have said. Keep the
+reason a line of code exists when forgetting it would break the code
+again — one sentence, in the comment itself.
 
 Never surface `QUIC`, `DCUtR`, `AutoNAT`, `multiaddr` or `circuit` in
 user-facing output outside a diagnostics view (`SPEC.md` §4).

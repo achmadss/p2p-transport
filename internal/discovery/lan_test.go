@@ -21,8 +21,7 @@ func newHost(t *testing.T) host.Host {
 	return h
 }
 
-// The whole point of step 2: two machines find each other with no
-// server and no Internet.
+// Two machines find each other with no server and no Internet.
 func TestTwoHostsFindEachOther(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 

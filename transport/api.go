@@ -12,64 +12,50 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// The surface. PLAN.md §2.1 is the contract and this file is the whole
-// of it: nothing here names a transport, a security handshake, an
-// address format or a traversal technique, and nothing above needs to
-// import libp2p to use it. Everything else in this package is below the
-// seam and unexported.
+// This file is the package's whole exported surface. Everything else is
+// unexported, so a caller never names a transport, a handshake, an
+// address format or a traversal technique.
 
-// PeerID is a machine's identity, stable across restarts and address
-// changes. It is proven by the handshake before any byte of an
-// application's is carried, so a stream's Peer is authenticated.
-//
-// It is not authorisation. What a proven machine may then do is a
-// question this layer does not ask; PLAN.md §2.2.
+// PeerID identifies a machine. It is stable across restarts and address
+// changes, and the handshake proves it before any byte is carried, so a
+// stream's Peer is authenticated. It says nothing about what that
+// machine may do.
 type PeerID string
 
-// Short is the fingerprint a person reads: the last eight characters,
-// in two groups. For display only — nothing decides anything on it.
+// Short returns the last eight characters of an id, in two groups, for
+// people to read. Do not decide anything on it.
 func (id PeerID) Short() string { return identity.Short(string(id)) }
 
-// Config is everything New needs.
-//
-// There is no key here. A private key is a libp2p type, and naming one
-// on this surface would make every caller import libp2p to fill it in,
-// which is the one thing step 4 exists to prevent. The key is loaded or
-// generated in Dir instead, and stays there.
+// Config is what New needs. The zero value is valid: local network only,
+// with the identity in the per-OS config directory.
 type Config struct {
-	// Dir is where identity.key lives. Empty means the per-OS default,
-	// or RATATOSKR_CONFIG_DIR when that is set.
+	// Dir holds identity.key, generated on first use. Empty means
+	// RATATOSKR_CONFIG_DIR, or the per-OS config directory.
 	Dir string
 
-	// Relays are opaque strings from whoever runs the relay. Empty means
-	// this machine is reachable on the local network and from anywhere
-	// it can be dialled directly, which is a complete way to run.
+	// Relays are relay addresses, as given by whoever runs one. Empty
+	// means no relay: this machine is reachable on the local network
+	// and wherever it can be dialled directly.
 	Relays []string
 
-	// NoLAN skips local discovery entirely, for a network where a
-	// multicast socket is unwelcome.
+	// NoLAN turns off discovery on the local network, so no multicast
+	// socket is opened.
 	NoLAN bool
 }
 
-// ID is this machine's identity.
+// ID returns this machine's identity.
 func (t *Host) ID() PeerID { return PeerID(t.h.ID().String()) }
 
-// Addrs are the strings another machine can be given to reach this one.
+// Addrs returns the strings to give another machine so it can Connect
+// here. Treat them as opaque and pass them along however you like.
 //
-// They are opaque on purpose: they come out of Addrs() here and go into
-// Connect there, through whatever channel the application already has,
-// and nothing above this package parses one. That single decision is
-// what leaves the application free to invent any rendezvous it likes
-// while keeping every address format below the seam.
-//
-// The set changes as this machine learns where it appears from outside,
-// so read it when you are about to hand it over rather than once at
-// startup.
+// They change as this machine learns where it appears from outside, so
+// read them when handing them over rather than once at startup.
 func (t *Host) Addrs() []string {
 	return p2pAddrs(peer.AddrInfo{ID: t.h.ID(), Addrs: t.h.Addrs()})
 }
 
-// Peers are the machines currently connected.
+// Peers returns the machines currently connected.
 func (t *Host) Peers() []PeerID {
 	ps := t.h.Network().Peers()
 	out := make([]PeerID, 0, len(ps))
@@ -79,22 +65,22 @@ func (t *Host) Peers() []PeerID {
 	return out
 }
 
-// Handle registers a handler for a protocol. The name is a string the
-// caller picks; this package imposes no framing inside the stream.
+// Handle registers fn for a protocol name of the caller's choosing.
+// Registering the same name again replaces the handler.
 //
-// The machine on the far end is already authenticated when the handler
-// runs. Whether it may do what it is asking is the caller's to decide.
+// The far end is authenticated by the time fn runs. Deciding what it may
+// do is the caller's.
 func (t *Host) Handle(proto string, fn func(Stream)) {
 	t.h.SetStreamHandler(protocol.ID(proto), func(s network.Stream) { fn(stream{s}) })
 }
 
-// Connect reaches a machine at the addresses it published.
+// Connect reaches a machine at the addresses it published, which are
+// whatever Addrs returned over there.
 //
-// With no addresses it uses what is already known — anything learned on
-// the local network or from an earlier session, and the configured
-// relays. With addresses it uses those, which is how a caller that
-// found a machine on the local network keeps the session on the local
-// network: hand over the local addresses and nothing else.
+// Given addrs, only those are dialled — so passing the addresses a
+// machine was found at on the local network keeps the session on that
+// network. Given none, it uses what it already knows about the machine
+// plus any configured relay.
 func (t *Host) Connect(ctx context.Context, id PeerID, addrs []string) error {
 	info, err := addrInfo(id, addrs)
 	if err != nil {
@@ -109,13 +95,12 @@ func (t *Host) Connect(ctx context.Context, id PeerID, addrs []string) error {
 	return nil
 }
 
-// Open starts a stream to a machine, connecting first if there is no
-// connection yet.
+// Open starts a stream to a machine, dialling first if there is no
+// connection yet. It takes the best path available at that moment.
 //
-// The stream takes whatever path is best right now, which after an
-// upgrade is the direct connection rather than the one the session
-// started on. A stream already open stays where it was born; PLAN.md
-// §2.2 is why, and Path is how a caller carrying bulk data notices.
+// A stream already open stays on the path it was born on. Bulk transfers
+// should therefore check Path as they go, and when a better one appears,
+// finish the current stream and send the rest on a new one.
 func (t *Host) Open(ctx context.Context, id PeerID, proto string) (Stream, error) {
 	pid, err := decode(id)
 	if err != nil {
@@ -128,8 +113,8 @@ func (t *Host) Open(ctx context.Context, id PeerID, proto string) (Stream, error
 	return stream{s}, nil
 }
 
-// PathTo reports how this machine currently reaches another, across
-// every connection it has to it.
+// PathTo reports how this machine currently reaches another, taking the
+// best of every connection it has to it.
 func (t *Host) PathTo(id PeerID) Path {
 	pid, err := decode(id)
 	if err != nil {
@@ -138,13 +123,13 @@ func (t *Host) PathTo(id PeerID) Path {
 	return t.pathTo(pid)
 }
 
-// OnLAN reports machines found on the local network, with the addresses
-// to reach them there. It is called for each one already found, and
-// again for each one found later.
+// OnLAN calls fn for every machine found on the local network, once for
+// each already known and again for each one found later. The addresses
+// passed reach that machine on this network, and go straight to Connect.
 //
-// This is the only discovery below the seam, and it needs no server and
-// no Internet. Everything else arrives as addresses the application got
-// from somewhere of its own.
+// It needs no server and no Internet, and does nothing when Config.NoLAN
+// was set. Machines anywhere else arrive as addresses the caller
+// obtained some other way.
 func (t *Host) OnLAN(fn func(PeerID, []string)) {
 	if t.lan == nil {
 		return
@@ -158,13 +143,13 @@ func (t *Host) OnLAN(fn func(PeerID, []string)) {
 	}
 }
 
-// Path is how a session reached the far end. It is measured from a live
-// connection, never guessed.
+// Path is how a session reached the far end, measured from a live
+// connection rather than guessed.
 //
-// lan and direct are both direct connections and the difference is
-// where: lan is a private address on this network, direct is a public
-// one across the Internet. Never write "direct" to mean "not relayed" —
-// one of the three is called that. PLAN.md §7.
+// lan and direct are both direct connections; the difference is where.
+// lan is a private address on this network, direct a public one across
+// the Internet. "direct" never means "not relayed" — relay is its own
+// value.
 type Path string
 
 const (
@@ -174,13 +159,9 @@ const (
 	PathRelay   Path = "relay"
 )
 
-// BetterThan ranks two measured paths: the local network if the machine
-// is here, the Internet if it is not, the relay only when neither can be
-// opened, and unknown below all three.
-//
-// It exists so that a transfer already running can ask whether moving is
-// worth a new stream. PathTo has the same order built into it, and this
-// is where the order is written down.
+// BetterThan reports whether p outranks other. The order is lan, direct,
+// relay, unknown. Use it to decide whether a running transfer is worth
+// moving onto a new stream.
 func (p Path) BetterThan(other Path) bool { return rank(p) < rank(other) }
 
 func rank(p Path) int {
@@ -195,29 +176,26 @@ func rank(p Path) int {
 	return 3
 }
 
-// Stream is bytes to one machine, and nothing else. There is no
-// framing, no envelope and no length prefix imposed from below;
-// whatever structure the bytes have is the caller's.
+// Stream carries raw bytes to one machine. No framing, envelope or
+// length prefix is added; whatever structure the bytes have is the
+// caller's. Writes block while the far end is behind, so copying a large
+// file needs no flow control of its own.
 //
-// Writing blocks while the far end is behind, so a caller copying ten
-// gigabytes needs no credit window of its own.
-//
-// A stream dies with the connection it was opened on. Nothing here can
-// save one, and pretending otherwise would produce a caller that is
-// subtly wrong; PLAN.md §2.2.
+// A stream dies with the connection it was opened on and cannot be
+// moved. Reissuing what was in flight is the caller's, since only the
+// caller knows what a partial answer meant.
 type Stream interface {
 	io.ReadWriteCloser
 
-	// CloseWrite says "I am done sending" and goes on reading. It is
-	// how the far end learns a request has ended without the
-	// connection ending with it.
+	// CloseWrite says "done sending" and goes on reading, ending a
+	// request without ending the connection.
 	CloseWrite() error
 
 	// Peer is the machine on the other end, proven by the handshake.
 	Peer() PeerID
 
-	// Path is where this stream's bytes are going. It cannot change:
-	// the stream is bound to the connection it was opened on.
+	// Path is where these bytes are going. It never changes for a
+	// stream that is already open.
 	Path() Path
 }
 
@@ -226,8 +204,7 @@ type stream struct{ network.Stream }
 func (s stream) Peer() PeerID { return PeerID(s.Stream.Conn().RemotePeer().String()) }
 func (s stream) Path() Path   { return pathOfConn(s.Stream.Conn()) }
 
-// decode turns an id back into what libp2p needs, refusing anything
-// that is not one rather than dialling into the dark.
+// decode parses an id, refusing anything that is not one.
 func decode(id PeerID) (peer.ID, error) {
 	pid, err := peer.Decode(string(id))
 	if err != nil {
@@ -236,10 +213,9 @@ func decode(id PeerID) (peer.ID, error) {
 	return pid, nil
 }
 
-// addrInfo turns opaque strings back into a dial set, refusing an
-// address that names a different machine. A caller cannot check that
-// itself — the id is inside the address it never parses — so this is
-// the only place it can be caught.
+// addrInfo parses opaque addresses into a dial set, rejecting any that
+// names a different machine. Only this layer can catch that: the id is
+// inside the address the caller never parses.
 func addrInfo(id PeerID, addrs []string) (peer.AddrInfo, error) {
 	pid, err := decode(id)
 	if err != nil {
@@ -263,8 +239,8 @@ func addrInfo(id PeerID, addrs []string) (peer.AddrInfo, error) {
 	return info, nil
 }
 
-// p2pAddrs is the one way an address leaves this package: identity
-// folded in, rendered, and opaque from there on.
+// p2pAddrs renders addresses with the identity folded in, which is the
+// form Connect accepts.
 func p2pAddrs(info peer.AddrInfo) []string {
 	as, err := peer.AddrInfoToP2pAddrs(&info)
 	if err != nil {

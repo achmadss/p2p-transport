@@ -18,57 +18,39 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// Turning a relayed connection into a direct one, and keeping on trying.
+// Getting a session off the relay, and keeping it off.
 //
-// DCUtR already attempts this once. It fires when an inbound relayed
-// connection arrives, tries three times, and stops — and the three
-// attempts all use whatever address the far end published at the moment
-// the connection opened. On the carrier TODO.md step 3 measured, that is
-// the one moment at which the answer is most likely to be wrong, and
-// there is no fourth attempt to be right in. libp2p keeps its hole
-// puncher private, so the retry cannot be asked of it; it is done here
-// instead, beside it rather than in place of it.
+// libp2p's own hole puncher tries three times at connection time, using
+// whatever address the far end published at that moment — which on a
+// carrier that renumbers ports is the moment the answer is most likely
+// wrong, with no fourth attempt to be right in. It is private, so the
+// retry cannot be asked of it and is done here beside it.
 //
-// The shape is Tailscale's, from `sendDiscoPingsLocked`: the path is not
-// decided once at dial time, it is a race that keeps being re-run for
-// the life of the session. Both ends run this loop, so the two dials
-// cross, and each outbound dial opens the mapping the other's dial needs
-// — which is a hole punch, minus the round-trip DCUtR spends agreeing on
-// when to fire. What replaces that agreement is repetition: a punch that
-// misses costs one dial and is tried again five seconds later, against
-// an address set that has been re-measured in the meantime.
+// The path is therefore never decided once. Both ends re-dial each other
+// every upgradeEvery for as long as the peer stays relayed, and because
+// both start counting from the same event — the relayed connection they
+// share — their dials cross. Two crossing dials are a hole punch, and
+// each miss costs one dial against an address set re-measured since.
 //
-// Nothing here relays anything. The relayed connection stays up and
-// carries what it was carrying; a direct connection that lands beside it
-// is preferred by libp2p for everything opened afterwards, and PathTo
-// reports the upgrade because it reads the live connections.
+// Nothing here relays anything, and nothing switches over. The relayed
+// connection keeps carrying what it was carrying; a direct one that
+// lands beside it is preferred for every stream opened afterwards.
 var (
-	// upgradeEvery is how often a relayed peer is re-tried. Tailscale's
-	// disco ping interval is five seconds and their heartbeat three;
-	// five is the cheaper of the two and this dial costs more than a
-	// ping.
+	// upgradeEvery is how often a relayed peer is re-tried.
 	upgradeEvery = config.Duration("RATATOSKR_UPGRADE_EVERY", 5*time.Second)
 
-	// upgradeDial bounds one attempt. It is short on purpose: a punch
-	// that has not landed in this long has missed, and the answer to a
-	// miss is the next attempt rather than a longer wait.
+	// upgradeDial bounds one attempt. Short on purpose: a punch that has
+	// not landed by now has missed, and the answer to a miss is the next
+	// attempt rather than a longer wait.
 	upgradeDial = config.Duration("RATATOSKR_UPGRADE_DIAL", 5*time.Second)
 )
 
-// watchForRelayed starts a punch loop for every peer that is reachable
-// only through a relay, in either direction. Both ends must dial for
-// either to get through, and both start counting from the same event —
-// the relayed connection they share — so their ticks land within a
-// round trip of each other without anything being negotiated. That is
-// the agreement DCUtR spends a round trip reaching, had for free, and
-// it is why this loop does not jitter its clock.
+// watchForRelayed calls repair on every connection change.
 //
-// It watches disconnections as well, because the ladder is climbed in
-// both directions. A direct connection that dies leaves the relayed one
-// beside it still carrying the session — libp2p goes back to it for
-// every stream opened after — and no new connection arrives to say so.
-// Without this the peer would fall to the relay and stay there with
-// nobody trying to climb back.
+// Disconnections count as much as connections. A direct connection that
+// dies leaves the relayed one beside it still carrying the session, and
+// no new connection arrives to say so — without watching for that, the
+// peer falls back to the relay and stays there.
 func (t *Host) watchForRelayed() {
 	t.h.Network().Notify(&network.NotifyBundle{
 		ConnectedF:    func(_ network.Network, c network.Conn) { t.repair(c.RemotePeer()) },
@@ -76,24 +58,17 @@ func (t *Host) watchForRelayed() {
 	})
 }
 
-// repair puts a peer back on the best rung it can reach, and returns
-// the rung it found it on.
+// repair puts a peer back on the best path it can reach, and returns the
+// one it found it on. It reads the best live path rather than the
+// connection that fired the event: a second relayed connection to a peer
+// already reached directly is no reason to punch, and one connection
+// closing is a different problem from the last one closing.
 //
-// It asks for the best path rather than looking at the connection it
-// was handed. A second relayed connection to a peer already reached
-// directly is not a reason to punch, a direct connection closing is not
-// a reason not to, and the last connection closing is a different
-// problem from a worse one being left behind.
-//
-// The walking is here rather than inside upgrade and restore, and one
-// goroutine does both directions, because holding them apart dropped
-// every handover between them. Each took the peer's slot for itself, so
-// the connection event that should have started the other half found
-// the slot taken and did nothing — and the loop that held it then
-// returned, because the state it was waiting for was the other half's.
-// A punch loop whose peer vanishes owes it a redial and a redial that
-// lands on the relay owes it a punch; both were a peer left on a rung
-// with nobody dialling for it.
+// One goroutine per peer walks both directions. Splitting them into two
+// dropped every handover: each took the peer's slot for itself, so the
+// event that should have started the other half found the slot taken and
+// did nothing. A punch loop whose peer vanishes owes it a redial, and a
+// redial that lands on the relay owes it a punch.
 func (t *Host) repair(id peer.ID) Path {
 	p := t.pathTo(id)
 	if p != PathRelay && p != PathUnknown {
@@ -125,29 +100,20 @@ func (t *Host) repair(id peer.ID) Path {
 	return p
 }
 
-// restoreFor bounds how long a peer that has gone entirely is chased.
-//
-// Long enough to outlast a Wi-Fi handover or a sleeping radio, short
-// enough that a machine genuinely switched off is not dialled for the
-// life of the process. When it expires the peer is simply gone, and the
-// next request from above dials it afresh.
+// restoreFor bounds how long a peer that has gone entirely is chased:
+// long enough to outlast a Wi-Fi handover or a sleeping radio, short
+// enough that a machine switched off is not dialled forever. After it
+// the peer is simply gone, and the next request dials afresh.
 var restoreFor = 30 * time.Second
 
-// restore climbs back down the ladder when every path to a peer has
-// gone. It reports whether the peer came back, so that repair can start
-// the climb again — landing on the relay is not the end of the ladder,
-// it is the bottom of it.
+// restore redials a peer every path to which has gone, until it comes
+// back or restoreFor expires. It reports which of the two happened, so
+// repair can start the climb again: landing on the relay is the bottom
+// of the ladder, not the end of it.
 //
-// The rungs are tried in order and the order is the point: everything
-// direct that is known, raced in one dial so the LAN wins on latency
-// where it exists, and the relay only once that has found nothing. A
-// relayed connection is worth having and worth leaving, so landing on
-// it is not the end — the notifee sees it arrive and starts the punch
-// loop, which is the same ladder climbed the other way.
-//
-// It cannot ask the peer where it lives, because AddrsProto needs a
-// connection and there is none. What it has is the peerstore, which
-// identify filled while the connection was up and which outlives it.
+// It cannot ask the peer where it lives, since that needs a connection
+// and there is none. It has the peerstore, filled while the connection
+// was up and outliving it.
 func (t *Host) restore(id peer.ID) bool {
 	tick := time.NewTicker(upgradeEvery)
 	defer tick.Stop()
@@ -171,10 +137,10 @@ func (t *Host) restore(id peer.ID) bool {
 	}
 }
 
-// redial tries the direct rungs together, then the relay if they found
-// nothing. Nothing is forced past an existing connection here the way
-// dialDirect forces: there is no connection to get past, and forcing
-// would rule out the one rung that is left.
+// redial races every known direct address in one dial, then falls back
+// to the relay. Unlike dialDirect it does not force past an existing
+// connection: there is none to get past, and forcing would rule out the
+// relay, which is the only option left.
 func (t *Host) redial(id peer.ID) {
 	if direct := directOnly(t.h.Peerstore().Addrs(id)); len(direct) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
@@ -198,7 +164,7 @@ func (t *Host) redial(id peer.ID) {
 
 // upgrade re-dials a relayed peer directly until it answers, the peer
 // goes away, or the host closes. It returns to repair, which decides
-// what the state it stopped on is owed.
+// what the state it stopped on needs next.
 func (t *Host) upgrade(id peer.ID) {
 	tick := time.NewTicker(upgradeEvery)
 	defer tick.Stop()
@@ -211,12 +177,11 @@ func (t *Host) upgrade(id peer.ID) {
 		}
 		switch p := t.pathTo(id); p {
 		case PathDirect, PathLAN:
-			// Someone's dial landed — ours, theirs, or DCUtR's. Which
-			// one is not worth finding out; the path is measured from
-			// the connection either way. Print which path it is rather
-			// than the word "direct": "direct" is also the name of one
-			// of them, and a LAN upgrade announcing itself as direct
-			// reads as a trip out to the Internet and back.
+			// A dial landed — ours or theirs, which does not matter,
+			// since the path is measured from the connection either
+			// way. Name the path rather than saying "direct": direct
+			// is also one of the two, and a local upgrade reported as
+			// direct reads like a trip out to the Internet and back.
 			fmt.Fprintf(os.Stderr, "connection to %s left the relay for %s after %s\n",
 				identity.Short(id.String()), p, time.Since(start).Round(time.Second))
 			return
@@ -227,29 +192,22 @@ func (t *Host) upgrade(id peer.ID) {
 	}
 }
 
-// dialDirect tries every address the far end can be reached at, lowest
-// rung first.
+// dialDirect races every address the far end can be reached at, local
+// and public together. Racing beats walking: a local dial finishes in a
+// millisecond or two while a punch across the Internet is still on its
+// first round trip, so the nearer address wins whenever it exists. The
+// relay needs no dialling — it is the connection this loop runs on, and
+// it keeps carrying the session until something better lands.
 //
-// The rungs are the LAN, then the Internet, then the relay that is
-// already carrying the session — and they are raced rather than walked,
-// because racing arrives at the same answer sooner. libp2p's dial ranker
-// groups the candidates into private, public and relay and starts the
-// first two together; the LAN dial completes in a millisecond or two
-// while a punch across the Internet is still waiting on its first round
-// trip, so the lower rung wins whenever it exists at all. The relay rung
-// needs no dialling: it is the connection this loop is running on, and
-// it keeps carrying the session until something better lands beside it.
+// Candidates come from two places because neither is complete. The
+// peerstore holds what libp2p learned, which over a relayed connection
+// is public addresses only; askAddrs gets the rest from the peer itself,
+// its local address above all. Relay addresses are dropped from both,
+// since a relay cannot be the way to stop using a relay.
 //
-// The candidates come from two places because neither is complete. The
-// peerstore has whatever identify and mDNS put there, which over a
-// relayed connection is public addresses only. AddrsProto asks the peer
-// itself and gets the rest — its LAN address above all. Circuit
-// addresses are dropped from both: a relay cannot be the answer to how
-// to stop using a relay.
-//
-// The dial is forced past the connection that already exists: without
-// that, libp2p answers "already connected" and returns the relayed
-// connection, which is the thing being escaped.
+// The dial is forced past the existing connection. Without that, libp2p
+// answers "already connected" and hands back the relayed connection,
+// which is the thing being escaped.
 func (t *Host) dialDirect(id peer.ID) {
 	ask, cancelAsk := context.WithTimeout(context.Background(), upgradeDial)
 	defer cancelAsk()
@@ -274,8 +232,8 @@ func (t *Host) dialDirect(id peer.ID) {
 }
 
 // handleAddrs answers AddrsProto with this machine's own addresses, one
-// per line. Circuits are stripped here as well as on the reading side,
-// because a peer should not have to filter what it was never owed.
+// per line, relay addresses stripped. Stripping happens here as well as
+// on the reading side so a peer never has to filter what it was sent.
 func handleAddrs(h host.Host) {
 	h.SetStreamHandler(wire.AddrsProto, func(s network.Stream) {
 		defer s.Close()
@@ -288,15 +246,16 @@ func handleAddrs(h host.Host) {
 
 // askAddrs reads the far end's own view of where it can be reached.
 //
-// Asked every tick rather than once, because the answer moves: the far
-// end re-measures its public address on the endpointsFresh clock, and a
-// laptop that changes network changes its LAN address too. It is a
-// kilobyte over a relayed connection, which PLAN.md §7 already counts as
-// free — only bulk transfer cares which path it took.
+// It exists because libp2p drops every private address it is told over a
+// public connection, and a relay circuit is a public connection — so two
+// machines on one network that meet over a relay are never told each
+// other's local address. Asking directly recovers it.
 //
-// Silence is not an error worth reporting. A peer too old to know this
-// protocol, or a relay too slow to answer within the tick, leaves the
-// peerstore's addresses to be dialled on their own.
+// Asked every tick rather than once, since the answer moves: the far end
+// re-measures its public address, and a laptop that changes network
+// changes its local one. It is a kilobyte, so the cost does not matter.
+// Silence is not worth reporting; the peerstore's addresses are dialled
+// on their own.
 func (t *Host) askAddrs(ctx context.Context, id peer.ID) []multiaddr.Multiaddr {
 	s, err := t.openStream(ctx, id, wire.AddrsProto)
 	if err != nil {

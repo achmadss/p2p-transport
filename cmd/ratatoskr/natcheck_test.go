@@ -9,10 +9,10 @@ import (
 	"github.com/achmadss/p2p-transport/internal/stun"
 )
 
-// The carrier this was written for gives the very next external port to
-// the next destination, and three lookalike reflectors all saw the same
-// one. A verdict drawn from them alone said hole punching can work,
-// which cost an evening; the fourth observer is what makes it false.
+// The carrier this was written for gives the next external port to the
+// next destination, and three reflectors sharing an address all saw the
+// same one. A verdict drawn from those alone reads as "punching works";
+// the fourth, distinct observer is what makes it false.
 func TestVerdictCatchesPerDestinationPort(t *testing.T) {
 	at := func(ip, mapped string) stun.Reflection {
 		return stun.Reflection{Server: ip, IP: net.ParseIP(ip), Mapped: mapped}
@@ -32,12 +32,12 @@ func TestVerdictCatchesPerDestinationPort(t *testing.T) {
 	}
 }
 
-// The numbers are this carrier's, on 7 Sep 2026: a relay connection
-// opened at startup was still observed as 35749 minutes later, while a
-// reflector asked on the same socket seconds before a punch answered
-// 61482. One round cannot tell those apart from a stable NAT, because
-// every observer asked inside one second agrees. Rounds spread over
-// three minutes can.
+// The numbers are this carrier's, measured 7 Sep 2026: a relay
+// connection opened at startup was still observed as 35749 minutes
+// later, while a reflector asked on the same socket seconds before a
+// punch answered 61482. One round cannot tell that apart from a stable
+// NAT, since every observer asked inside a second agrees; rounds spread
+// over three minutes can.
 func TestClassifySeparatesHeldMappingFromFreshDestination(t *testing.T) {
 	const base = "182.6.166.95:35749"
 	at := func(server, mapped string) stun.Reflection {

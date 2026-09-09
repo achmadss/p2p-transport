@@ -11,21 +11,20 @@ import (
 	"github.com/achmadss/p2p-transport/internal/stun"
 )
 
-// natcheck answers the only question that decides whether two machines
-// can ever talk directly: what does each NAT do with the source port of
-// one socket when that socket writes to different places?
+// natcheck reports what this network does with the source port of one
+// socket when that socket writes to different places, which decides
+// whether two machines can ever connect directly.
 //
-// RFC 4787 names the three answers. Endpoint-independent mapping reuses
-// one external port for every destination, which is what hole punching
-// needs, because the port a third party observed is the port the far
-// peer may use. Address-dependent mapping picks a new port per
-// destination address, address-and-port-dependent per address and port;
-// either way the observed port is worthless to anyone else, and no
-// amount of signalling recovers it.
+// RFC 4787 names the answers. Endpoint-independent mapping reuses one
+// external port for every destination, which is what a hole punch needs:
+// the port a third party observed is the port the far machine can use.
+// Address-dependent mapping picks a new port per destination, so the
+// observed port is worthless to anyone else and no signalling recovers
+// it.
 //
-// The test needs one socket, several public reflectors, and at least
-// two distinct addresses among them — plus two ports on one address, or
-// the last two answers cannot be told apart.
+// It needs one socket and several reflectors on at least two distinct
+// addresses, plus two ports on one of them, or the last two answers
+// cannot be told apart.
 
 func natcheck() error {
 	servers := stun.Servers()

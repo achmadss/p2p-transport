@@ -1,11 +1,11 @@
 // Package identity owns this machine's long-lived keypair.
 //
 // The key is generated once and never leaves the machine. The peer id is
-// a multihash of the public key, so it proves itself: a Noise handshake
-// cannot succeed against a peer that does not hold the matching private
-// key. This is deliberately not a hardware fingerprint — those break
-// when a VM is cloned or a disk is swapped, and they leak facts about
-// the machine. PLAN.md §4.
+// a multihash of the public key, so it proves itself: a handshake cannot
+// succeed against a peer that does not hold the matching private key.
+//
+// Deliberately not a hardware fingerprint. Those break when a VM is
+// cloned or a disk swapped, and they leak facts about the machine.
 package identity
 
 import (
@@ -35,18 +35,16 @@ type Identity struct {
 // written anywhere but identity.key and never sent over any wire.
 func (i *Identity) PrivateKey() crypto.PrivKey { return i.priv }
 
-// ID is the full peer id. Diagnostics and protocol only — SPEC.md §4
-// keeps it out of ordinary user-facing output, where Fingerprint goes
-// instead.
+// ID is the full peer id, for protocol use and diagnostics. Show
+// Fingerprint to people instead.
 func (i *Identity) ID() peer.ID { return i.id }
 
 // Fingerprint is the short form for a person to read aloud or compare on
 // screen: the last eight characters of the peer id, in two groups.
 //
-// It is for display only. Nothing authorises on a fingerprint — the full
-// id is what the trust list stores and what the handshake proves. Eight
-// characters would be far too few to resist a deliberate collision, and
-// it is never asked to.
+// Display only. Eight characters are far too few to resist a deliberate
+// collision, so nothing may decide anything on one — the full id is what
+// the handshake proves.
 func (i *Identity) Fingerprint() string { return Short(i.id.String()) }
 
 // Short is Fingerprint's rule, for peer ids that are not ours.
@@ -59,8 +57,8 @@ func Short(id string) string {
 }
 
 // LoadOrCreate returns this machine's identity, generating one on first
-// run. Later runs return the same key, so the peer id is stable. An
-// empty dir means the environment override or the per-OS default.
+// run and returning the same key afterwards, so the peer id is stable.
+// An empty dir means the environment override or the per-OS default.
 func LoadOrCreate(dir string) (*Identity, error) {
 	path, err := config.Path(dir, FileName)
 	if err != nil {
@@ -100,9 +98,9 @@ func create(path string) (*Identity, error) {
 	return &Identity{priv: priv, id: id}, nil
 }
 
-// fromBytes fails loudly. A key file that does not parse is either
-// corrupt or someone else's, and both cases change the peer id — which
-// would silently break every trust list that names this machine.
+// fromBytes fails loudly rather than regenerating. A key file that does
+// not parse is corrupt or someone else's, and either way generating a
+// new one changes the peer id every remote machine knows this one by.
 func fromBytes(b []byte, path string) (*Identity, error) {
 	if len(b) == 0 {
 		return nil, fmt.Errorf("%s is empty: delete it to generate a new identity, but every peer that trusts this machine will need to trust the new id", path)
@@ -119,12 +117,11 @@ func fromBytes(b []byte, path string) (*Identity, error) {
 }
 
 // checkPerm refuses to start when the private key is readable by anyone
-// but its owner. Continuing would mean serving files under an identity
-// another account on this machine can steal.
+// but its owner: continuing would run under an identity another account
+// on this machine can steal.
 //
-// Windows has no meaningful Unix mode bits — os.Stat reports a synthetic
-// one — so the check is skipped there. Its access control lives in ACLs,
-// which is a separate piece of work and is noted as such.
+// Skipped on Windows, whose Unix mode bits are synthetic. Its access
+// control lives in ACLs, which this does not read — a known gap.
 func checkPerm(path string) error {
 	if runtime.GOOS == "windows" {
 		return nil

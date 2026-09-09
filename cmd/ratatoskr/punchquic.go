@@ -25,24 +25,17 @@ import (
 
 const alpn = "ratatoskr-punch"
 
-// punchQUIC is punchtest with the last difference removed.
+// punchQUIC punches a hole and completes a real QUIC handshake over it.
+// Run "punch-quic listen" on one machine and "punch-quic dial" on the
+// other.
 //
-// punchtest proves a UDP packet can cross a pair of NATs. It does not
-// prove a QUIC handshake can, and that is what the agent needs: several
-// packets each way, inside one window, on a mapping both NATs hold open
-// for the whole exchange. A path that passes one datagram and loses the
-// fourth looks like a working punch to punchtest and like a failure to
-// libp2p.
-//
-// So this runs quic-go — the same library libp2p runs, over the same
-// socket that asked STUN and punched. Nothing of libp2p is in the way:
-// no DCUtR, no relay, no identify, no address discovery. If this
-// connects and `ratatoskr connect` does not, the fault is in how we
-// drive libp2p and nowhere else. If this fails too, no configuration
-// would have saved it.
-//
-// One side listens and one dials, named on the command line, because
-// with two machines and one operator there is nothing to negotiate.
+// It exists because a punched hole passing one datagram is not the same
+// as one carrying a handshake: several packets each way, in one window,
+// on a mapping both NATs hold open throughout. This runs the same QUIC
+// library the transport does, over the same socket that asked the
+// reflectors, with nothing else in the way. If this connects and
+// "ratatoskr connect" does not, the fault is in how the transport is
+// driven; if this fails too, no configuration would have helped.
 func punchQUIC(role string) error {
 	if role != "listen" && role != "dial" {
 		return fmt.Errorf("punch-quic needs a role: listen on one machine, dial on the other")

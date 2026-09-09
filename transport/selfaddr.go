@@ -14,43 +14,30 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 )
 
-// Asking a reflector where libp2p's own QUIC socket is, from inside the
-// process.
+// Asking a reflector where the punching socket is, from inside the
+// process that owns it.
 //
-// TODO.md step 3 measured a carrier that leaves an open mapping on its
-// original port and gives each new destination the next value of a
-// counter that walks forward. The agent's connection to the relay is
-// opened once at startup and never moves, so the port the relay
-// observes drifts further from the port a fresh peer will reach for as
-// long as the agent runs. Publishing the relay's view therefore hands
-// every peer an address that was true at startup, and the punch aims at
-// a door nobody is behind. A three-minute-old agent already fails; an
-// hour-old one fails by more.
+// A reflector reports the port belonging to the socket that asked, so a
+// throwaway socket learns nothing about the one libp2p punches from. On
+// a carrier that gives each new destination its own port, that is the
+// whole difference: the address a relay saw at startup ages while the
+// port a fresh peer would reach walks away from it, so the punch aims at
+// a door nobody is behind.
 //
-// There is no offset to learn and add, because it is not a property of
-// the carrier — it is the age of the connection that was measured. The
-// only address worth publishing is one taken on the socket that will do
-// the punching, toward somewhere it has not spoken to, at the moment it
-// punches. That socket belongs to quic-go, and
-// quicreuse.OverrideListenUDP is the one place it can be wrapped before
-// it is handed over.
-//
-// The reply is intercepted on the way in. quic-go would drop it as
-// unparseable, which is harmless, but it is also the answer we asked
-// for and nobody else can read it.
+// The socket belongs to quic-go, and quicreuse.OverrideListenUDP is the
+// one place it can be wrapped before it is handed over. The reply is
+// intercepted on the way in, since quic-go would drop it as unparseable
+// and nobody else can read it.
 
-// endpointsFresh is how long a measured set is worth believing.
-//
-// Tailscale's `endpointsFreshEnoughDuration`, taken with its reasoning
-// intact: a UDP mapping typically expires at thirty seconds, so a set
-// measured twenty-seven seconds ago names doors that are probably still
-// open, and the set measured when the agent started names doors that
-// certainly are not. Their `enqueueCallMeMaybe` checks this clock before
-// signalling and re-measures if it has run out; here the refresher runs
-// on it and the punch reads what the refresher left.
+// endpointsFresh is how long a measured set is worth believing. A UDP
+// mapping usually expires at thirty seconds, so a set measured
+// twenty-seven seconds ago names doors probably still open, and one
+// measured at startup names doors that certainly are not.
 const endpointsFresh = 27 * time.Second
 
-// selfAddr wraps the socket libp2p punches from and can name it.
+// selfAddr wraps the socket libp2p punches from and can name it, by
+// writing STUN requests into it and claiming the replies before quic-go
+// sees them.
 type selfAddr struct {
 	net.PacketConn
 
@@ -63,27 +50,21 @@ type selfAddr struct {
 }
 
 // Addrs returns every public address this socket answers on, as several
-// reflectors see it independently, freshest first. Empty when none
-// answers in time.
+// reflectors see it independently, in arrival order. Empty when none
+// answers within the given timeout.
 //
-// One answer was never enough. A NAT can hold the mapping a first
-// observer was given while handing a second observer a different port,
-// and then the first port is a door with nobody behind it — netcheck's
-// GetGlobalAddrs describes exactly this case, "new traffic to the old
-// endpoint will not succeed, but new traffic to the newly discovered
-// endpoints does succeed". So ask everyone at once and offer the whole
-// set: DCUtR's CONNECT carries a list, and it has been handed one
-// address since the day it was wired up.
+// It is a set rather than one address because a NAT can hold the mapping
+// one observer was given while handing another a different port, leaving
+// the first as a door with nobody behind it. Every candidate is offered
+// and every candidate is dialled.
 //
-// The keep rule is theirs. The first answer back is kept whatever else
-// happens — it is the lowest-latency reflector's word, and dropping it
-// would leave a machine with a perfectly ordinary NAT advertising
-// nothing. Every other distinct address needs two independent sightings,
-// because an address one observer alone reports is a door minted for
-// that observer.
+// The keep rule: the first answer back survives whatever else happens,
+// since dropping it would leave an ordinary NAT advertising nothing.
+// Every other distinct address needs two independent sightings, because
+// an address only one observer reports was minted for that observer.
 //
-// Answers are cached for endpointsFresh. A punch asks more than once
-// within a few seconds and the set must not change underneath it.
+// Answers are cached for endpointsFresh, so a punch asking twice within
+// a few seconds sees the same set.
 func (s *selfAddr) Addrs(within time.Duration) []string {
 	s.cacheMu.Lock()
 	if time.Since(s.taken) < endpointsFresh && len(s.cache) > 0 {
@@ -118,9 +99,8 @@ func (s *selfAddr) Addrs(within time.Duration) []string {
 	if os.Getenv("RATATOSKR_DIAG") != "" {
 		// Answers and distinct addresses are different counts, and
 		// confusing them inverts the finding: one address seen seven
-		// times is a carrier that gives every observer the same door,
-		// and seven addresses seen once each is a carrier that gives
-		// each one its own. Both used to print as "1 of 8".
+		// times is a carrier giving every observer the same door, seven
+		// addresses seen once each is one giving each its own.
 		answers := 0
 		say := make([]string, 0, len(order))
 		for _, a := range order {
@@ -133,7 +113,7 @@ func (s *selfAddr) Addrs(within time.Duration) []string {
 	return out
 }
 
-// keepCorroborated applies the rule above to answers in arrival order.
+// keepCorroborated keeps the first answer and every address seen twice.
 func keepCorroborated(order []string, seen map[string]int) []string {
 	var out []string
 	for i, a := range order {
@@ -175,7 +155,8 @@ func (s *selfAddr) ask(server string, within time.Duration) string {
 	}
 }
 
-// ReadFrom hands quic-go everything except the answers we asked for.
+// ReadFrom passes quic-go everything except the replies to our own STUN
+// requests, which it would only discard.
 func (s *selfAddr) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
 		n, addr, err := s.PacketConn.ReadFrom(b)
@@ -189,8 +170,8 @@ func (s *selfAddr) ReadFrom(b []byte) (int, net.Addr, error) {
 	}
 }
 
-// claim reports whether these bytes answer one of our own questions, and
-// delivers the answer if so.
+// claim reports whether these bytes answer one of our own requests, and
+// delivers the address if so.
 func (s *selfAddr) claim(b []byte) bool {
 	if len(b) < 20 {
 		return false
@@ -204,8 +185,8 @@ func (s *selfAddr) claim(b []byte) bool {
 	if !ok {
 		return false
 	}
-	// A reply whose id matches is ours whether or not it parses; passing
-	// a malformed one to quic-go helps nobody.
+	// A reply whose id matches is ours whether or not it parses, and a
+	// malformed one is no use to quic-go either.
 	if mapped := stun.ParseResponse(b, b[8:20]); mapped != "" {
 		select {
 		case ch <- mapped:
@@ -215,13 +196,13 @@ func (s *selfAddr) claim(b []byte) bool {
 	return true
 }
 
-// socketRef holds the socket once libp2p opens it. The option has to be
-// built before libp2p.New and the socket only exists afterwards, so the
+// socketRef holds the socket once libp2p opens it. The option must be
+// built before libp2p.New and the socket exists only afterwards, so the
 // caller keeps the box rather than the thing.
 type socketRef struct{ v atomic.Pointer[selfAddr] }
 
-// Addrs names the socket, or returns nothing before one exists or when
-// no reflector answers.
+// Addrs names the socket. Empty before one exists, or when no reflector
+// answers.
 func (r *socketRef) Addrs(within time.Duration) []string {
 	s := r.v.Load()
 	if s == nil {
@@ -230,13 +211,10 @@ func (r *socketRef) Addrs(within time.Duration) []string {
 	return s.Addrs(within)
 }
 
-// ownSocket installs the wrapper and hands back the box the first IPv4
-// socket lands in.
-//
-// libp2p opens one socket per listen address and every QUIC listen
-// address here binds a wildcard, so in practice there is one and the
-// punch leaves from it. Later sockets are wrapped too and simply never
-// asked.
+// ownSocket installs the wrapper and returns the box the first IPv4
+// socket lands in. libp2p opens one socket per listen address and the
+// QUIC addresses here bind wildcards, so in practice there is one and
+// the punch leaves from it; later sockets are wrapped but never asked.
 func ownSocket() (*socketRef, libp2p.Option) {
 	ref := &socketRef{}
 

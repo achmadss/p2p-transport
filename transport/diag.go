@@ -10,18 +10,17 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// The escape hatch. SPEC.md §4 keeps every word below the seam out of
-// ordinary output, and then allows exactly one place where all of it
-// appears: RATATOSKR_DIAG. A bug report needs the mechanism; a file
-// manager does not.
+// diagnose prints what the connection machinery believes about this
+// machine, to stderr, for as long as the host runs. Set RATATOSKR_DIAG
+// to switch it on; it is off by default because a caller wants a path,
+// not a mechanism.
 //
-// It lives in this package rather than in the harness because the facts
-// it prints — the reachability verdict, whether a relay reservation
-// exists, the address of every live connection — are below the seam, and
-// reaching them from outside would mean exposing the libp2p host to do
-// it. Without it a failed hole punch is one line of "no direct path"
-// with nothing behind it, and the three separate things that must all
-// succeed cannot be told apart.
+// It prints the reachability verdict, whether a relay reservation
+// exists, and the address of every live connection. Without those, a
+// failed connection is one line with nothing behind it and the three
+// things that must all succeed cannot be told apart. It lives here
+// rather than in the harness because reaching these facts from outside
+// would mean exposing the underlying host to do it.
 func (t *Host) diagnose() {
 	if os.Getenv("RATATOSKR_DIAG") == "" {
 		return

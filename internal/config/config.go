@@ -1,14 +1,9 @@
 // Package config owns where this machine keeps its state on each
-// operating system, and the one file that names the relays it may use.
-//
-// Nothing here imports libp2p. The config is a plain description of
-// intent; turning a peer id string into a live connection is the
-// transport's job, a layer above.
+// operating system, and the file naming the relays it may use.
 //
 // Every entry point takes a directory, with "" meaning the environment
-// override or the per-OS default. An application embedding this module
-// says where its state lives rather than inheriting a choice from a
-// process-wide variable it did not set.
+// override or the per-OS default, so a caller says where its state lives
+// rather than inheriting a process-wide variable it did not set.
 package config
 
 import (
@@ -31,11 +26,9 @@ const (
 
 // Dir returns the config directory, creating it if it does not exist.
 //
-// The directory is 0700 because identity.key lives in it. A 0600 key
-// inside a 0755 directory is still readable by anyone who can list the
-// directory on some systems, so the directory carries the same
-// restriction as the file. MkdirAll leaves an existing directory's mode
-// alone, hence the Chmod.
+// It is 0700 because identity.key lives in it: on some systems a 0600
+// file in a 0755 directory is still readable by anyone who can list it.
+// MkdirAll leaves an existing directory's mode alone, hence the Chmod.
 func Dir(override string) (string, error) {
 	d := override
 	if d == "" {
@@ -68,13 +61,9 @@ func Path(override, name string) (string, error) {
 	return filepath.Join(d, name), nil
 }
 
-// Config is the whole of config.json.
-//
-// It is the harness's file, not the library's: `transport.New` is given
-// its relays in code. Shares, a trust list and machine aliases used to
-// live here and were removed with step 4 — they answer "who may read my
-// files" and "what do I call this machine", which are the application's
-// questions and belong in the application's own state.
+// Config is the whole of config.json. It belongs to the command-line
+// tools: transport.New is given its relays in code, and an application
+// embedding the transport keeps its own settings wherever it likes.
 type Config struct {
 	Version int `json:"v"`
 

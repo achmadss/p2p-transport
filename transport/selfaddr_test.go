@@ -85,8 +85,9 @@ func reply(req []byte, _ *net.UDPAddr) []byte {
 	return b
 }
 
-// Guard the assumption the test above rests on: this is the same parser
-// the agent uses, not a second one written to agree with the fixture.
+// Guards the assumption the test above rests on: this is the same parser
+// the transport uses, not a second one written to agree with the
+// fixture.
 func TestFixtureParsesWithTheRealParser(t *testing.T) {
 	req, txid, err := stun.Request()
 	if err != nil {
@@ -97,12 +98,11 @@ func TestFixtureParsesWithTheRealParser(t *testing.T) {
 	}
 }
 
-// TestKeepCorroborated pins the rule that decides what gets published.
-// Two reflectors agreeing on a port is evidence of a door; one reflector
-// alone is a door minted for that reflector, and publishing it costs
-// every peer a dial into nothing. The first answer is kept regardless,
-// or an ordinary NAT whose reflectors happen to disagree would advertise
-// no address at all.
+// TestKeepCorroborated pins what gets published. Two reflectors agreeing
+// on a port is evidence of a door; one alone is a door minted for that
+// reflector, and publishing it costs every peer a dial into nothing. The
+// first answer is kept regardless, or an ordinary NAT whose reflectors
+// disagree would advertise nothing at all.
 func TestKeepCorroborated(t *testing.T) {
 	cases := []struct {
 		name  string

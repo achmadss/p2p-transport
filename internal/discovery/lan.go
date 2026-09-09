@@ -1,11 +1,9 @@
-// Package discovery finds other Ratatoskr machines.
+// Package discovery finds other machines on the local network over mDNS,
+// with no server and no Internet.
 //
-// This is the only discovery layer 4 does: mDNS, no server, no
-// Internet. PLAN.md §5 gives it a 400 ms head start over whatever
-// addresses the application supplies, because a peer found here is
-// dialled over the local network and nothing leaves it. There is no
-// Discovery interface, because addresses from anywhere else arrive as
-// opaque strings rather than as another implementation.
+// It is the only discovery the transport does. Machines anywhere else
+// arrive as addresses the application obtained some other way, so there
+// is no Discovery interface to implement.
 package discovery
 
 import (
@@ -41,22 +39,16 @@ type LAN struct {
 // Start begins advertising and listening. Close stops both.
 //
 // found is called for each peer heard from, so a caller is told rather
-// than having to poll. Nil is allowed: a caller that only wants the
-// list at the end reads Peers.
+// than having to poll. Nil is allowed; a caller that only wants the list
+// at the end reads Peers.
 //
-// RATATOSKR_NO_MDNS returns a LAN that finds nothing and advertises
-// nothing, for a machine where multicast is not merely useless but
-// harmful. One such machine is on record: a macOS content filter fails
-// every packet this sends to 224.0.0.251 — the kernel logs
-// `sosend_reinject() failed` for lport 5353 — and the agent takes the
-// terminal down with it on startup, while the same machine runs
-// punch-quic, which opens no multicast socket, without trouble. Nothing
-// in the LAN path can defend against a filter below the socket, so the
-// only remedy available here is not to open it.
-//
-// The cost is exactly what it says: no peers found on this network, and
-// this machine invisible to peers on it. Everything reached through a
-// relay or a punched address still works.
+// Setting RATATOSKR_NO_MDNS returns a LAN that finds nothing and
+// advertises nothing, for a machine where opening a multicast socket is
+// not merely useless but harmful — a content filter below the socket
+// cannot be defended against from here, and one is on record killing the
+// process at startup. The cost is exactly that: no machines found on
+// this network and none finding this one. Relayed and direct
+// connections are unaffected.
 func Start(h host.Host, found func(peer.AddrInfo)) (*LAN, error) {
 	l := &LAN{h: h, found: found, seen: map[peer.ID][]peer.AddrInfo{}, done: make(chan struct{})}
 	if os.Getenv("RATATOSKR_NO_MDNS") != "" {
@@ -88,10 +80,9 @@ func (l *LAN) restart() error {
 	return nil
 }
 
-// watchAddresses restarts the advertisement when this machine's
-// addresses change. Joining a different network, or waking from sleep on
-// a new one, otherwise leaves the service announcing an address that no
-// longer reaches anything.
+// watchAddresses re-advertises when this machine's addresses change.
+// Joining a different network, or waking on one, otherwise leaves the
+// service announcing an address that reaches nothing.
 func (l *LAN) watchAddresses(ctx context.Context) {
 	defer close(l.done)
 
@@ -117,9 +108,8 @@ func (l *LAN) watchAddresses(ctx context.Context) {
 	}
 }
 
-// forget drops the peer list on a network change. The machines on the
-// old network are not reachable from the new one, and reporting them as
-// found would be a guess.
+// forget drops the peer list on a network change: machines on the old
+// network are not reachable from the new one.
 func (l *LAN) forget() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
