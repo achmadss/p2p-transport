@@ -59,9 +59,10 @@ func Short(id string) string {
 }
 
 // LoadOrCreate returns this machine's identity, generating one on first
-// run. Later runs return the same key, so the peer id is stable.
-func LoadOrCreate() (*Identity, error) {
-	path, err := config.Path(FileName)
+// run. Later runs return the same key, so the peer id is stable. An
+// empty dir means the environment override or the per-OS default.
+func LoadOrCreate(dir string) (*Identity, error) {
+	path, err := config.Path(dir, FileName)
 	if err != nil {
 		return nil, err
 	}

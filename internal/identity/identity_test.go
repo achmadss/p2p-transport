@@ -24,11 +24,11 @@ func isolate(t *testing.T) string {
 func TestIDStableAcrossRestarts(t *testing.T) {
 	isolate(t)
 
-	first, err := LoadOrCreate()
+	first, err := LoadOrCreate("")
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	second, err := LoadOrCreate()
+	second, err := LoadOrCreate("")
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -39,12 +39,12 @@ func TestIDStableAcrossRestarts(t *testing.T) {
 
 func TestSeparateDirsGetSeparateIdentities(t *testing.T) {
 	isolate(t)
-	a, err := LoadOrCreate()
+	a, err := LoadOrCreate("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	isolate(t)
-	b, err := LoadOrCreate()
+	b, err := LoadOrCreate("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestKeyFileIsOwnerOnly(t *testing.T) {
 		t.Skip("Unix mode bits are synthetic on Windows")
 	}
 	dir := isolate(t)
-	if _, err := LoadOrCreate(); err != nil {
+	if _, err := LoadOrCreate(""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +78,7 @@ func TestRefusesLooseKeyPermissions(t *testing.T) {
 		t.Skip("Unix mode bits are synthetic on Windows")
 	}
 	dir := isolate(t)
-	if _, err := LoadOrCreate(); err != nil {
+	if _, err := LoadOrCreate(""); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, FileName)
@@ -87,7 +87,7 @@ func TestRefusesLooseKeyPermissions(t *testing.T) {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadOrCreate(); err == nil {
+		if _, err := LoadOrCreate(""); err == nil {
 			t.Fatalf("mode %04o was accepted; it must be refused", mode)
 		}
 	}
@@ -109,7 +109,7 @@ func TestCorruptKeyFailsLoudly(t *testing.T) {
 			if err := os.WriteFile(path, body, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			id, err := LoadOrCreate()
+			id, err := LoadOrCreate("")
 			if err == nil {
 				t.Fatalf("corrupt key was accepted, giving peer id %s", id.ID())
 			}
@@ -122,7 +122,7 @@ func TestCorruptKeyFailsLoudly(t *testing.T) {
 
 func TestFingerprintIsShortAndDerivedFromTheID(t *testing.T) {
 	isolate(t)
-	id, err := LoadOrCreate()
+	id, err := LoadOrCreate("")
 	if err != nil {
 		t.Fatal(err)
 	}

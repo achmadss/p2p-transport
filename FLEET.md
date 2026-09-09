@@ -581,14 +581,16 @@ single one has actually hurt.
 
 ## 8. What changes in the code that exists
 
-**`internal/transport/transport.go`** — `New(key, relays []string)`
-becomes `New(Config{Key, Coordinator, NoLAN})`. The `circuits` slice,
+**`transport/transport.go`** — `New(Config{Dir, Relays, NoLAN})`
+becomes `New(Config{Dir, Coordinator, NoLAN})` — the relay list is
+replaced by the coordinator that hands relays out, and step 4 already
+spent the one API break this costs. The `circuits` slice,
 built once at startup, becomes a set behind a mutex that the lease loop
 replaces. `Addrs()` changes when the relay changes, so the peer has to
 be told: bifrost knows both ends and carries it, and
 `/ratatoskr/addrs/1.0.0` covers the case where some connection survives.
 
-**`internal/transport/upgrade.go`** — split `restore()`. The 30-second
+**`transport/upgrade.go`** — split `restore()`. The 30-second
 window stays for direct addresses. Relay acquisition moves to a
 host-level lease loop that never gives up. `redial()` reads the
 refreshed circuit set instead of the frozen one.

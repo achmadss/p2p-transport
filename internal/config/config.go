@@ -4,6 +4,11 @@
 // Nothing here imports libp2p. The config is a plain description of
 // intent; turning a peer id string into a live connection is the
 // transport's job, a layer above.
+//
+// Every entry point takes a directory, with "" meaning the environment
+// override or the per-OS default. An application embedding this module
+// says where its state lives rather than inheriting a choice from a
+// process-wide variable it did not set.
 package config
 
 import (
@@ -12,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"time"
 )
 
 // EnvDir overrides the config directory. It exists so tests can run
@@ -32,8 +36,11 @@ const (
 // directory on some systems, so the directory carries the same
 // restriction as the file. MkdirAll leaves an existing directory's mode
 // alone, hence the Chmod.
-func Dir() (string, error) {
-	d := os.Getenv(EnvDir)
+func Dir(override string) (string, error) {
+	d := override
+	if d == "" {
+		d = os.Getenv(EnvDir)
+	}
 	if d == "" {
 		base, err := os.UserConfigDir()
 		if err != nil {
@@ -53,77 +60,44 @@ func Dir() (string, error) {
 }
 
 // Path returns the full path of a file inside the config directory.
-func Path(name string) (string, error) {
-	d, err := Dir()
+func Path(override, name string) (string, error) {
+	d, err := Dir(override)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(d, name), nil
 }
 
-// Mode is how much a share allows.
-type Mode string
-
-const (
-	ReadOnly  Mode = "ro"
-	ReadWrite Mode = "rw"
-)
-
-func (m Mode) valid() bool { return m == ReadOnly || m == ReadWrite }
-
-// A Share is one folder this machine offers, under a short name. The
-// name is what appears in a path like home:/Documents; the real
-// location on disk is never shown to a remote peer.
-type Share struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Mode Mode   `json:"mode"`
-}
-
-// A Peer is a peer id an application above chose to trust.
-// Nothing in this repository reads these: authorisation is the
-// application's, not layer 4's, and step 4 of TODO.md removes them.
-type Peer struct {
-	ID    string    `json:"id"`
-	Name  string    `json:"name,omitempty"`
-	Added time.Time `json:"added"`
-}
-
 // Config is the whole of config.json.
 //
-// Trusted and Aliases point in opposite directions and are deliberately
-// separate: Trusted answers "who may read my files", Aliases answers
-// "what do I call the machines I connect to". A device is commonly in
-// one and not the other.
+// It is the harness's file, not the library's: `transport.New` is given
+// its relays in code. Shares, a trust list and machine aliases used to
+// live here and were removed with step 4 — they answer "who may read my
+// files" and "what do I call this machine", which are the application's
+// questions and belong in the application's own state.
 type Config struct {
-	Version int               `json:"v"`
-	Shares  []Share           `json:"shares"`
-	Trusted []Peer            `json:"trusted"`
-	Aliases map[string]string `json:"aliases"` // alias -> peer id
+	Version int `json:"v"`
 
 	// Relays are heimdall nodes, as full multiaddrs. Empty means LAN
 	// only, which is a complete and supported way to run.
 	Relays []string `json:"relays"`
 }
 
-// Default is what a first run writes: nothing shared, nobody trusted.
-// Sharing is opted into, never inherited from a default.
-func Default() *Config {
-	return &Config{Version: 1, Shares: []Share{}, Trusted: []Peer{}, Aliases: map[string]string{}, Relays: []string{}}
-}
+// Default is what a first run writes: no relays, so LAN only.
+func Default() *Config { return &Config{Version: 1, Relays: []string{}} }
 
 const fileName = "config.json"
 
 // Load reads config.json, writing a default one if it is missing.
-func Load() (*Config, error) {
-	p, err := Path(fileName)
+func Load(dir string) (*Config, error) {
+	p, err := Path(dir, fileName)
 	if err != nil {
 		return nil, err
 	}
 	b, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		c := Default()
-		if err := c.Save(); err != nil {
+		if err := c.Save(dir); err != nil {
 			return nil, err
 		}
 		return c, nil
@@ -136,47 +110,15 @@ func Load() (*Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("%s is not valid JSON: %w", p, err)
 	}
-	if c.Aliases == nil {
-		c.Aliases = map[string]string{}
-	}
-	if err := c.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", p, err)
+	if c.Version != 1 {
+		return nil, fmt.Errorf("%s: unknown version %d", p, c.Version)
 	}
 	return &c, nil
 }
 
-// validate rejects a config rather than silently correcting it. A share
-// with an unreadable mode is a question for the user, not something to
-// guess at — guessing here would mean guessing about access.
-func (c *Config) validate() error {
-	if c.Version != 1 {
-		return fmt.Errorf("unknown version %d", c.Version)
-	}
-	seen := map[string]bool{}
-	for _, s := range c.Shares {
-		switch {
-		case s.Name == "":
-			return fmt.Errorf("a share has no name")
-		case seen[s.Name]:
-			return fmt.Errorf("two shares are both named %q", s.Name)
-		case !filepath.IsAbs(s.Path):
-			return fmt.Errorf("share %q: path %q is not absolute", s.Name, s.Path)
-		case !s.Mode.valid():
-			return fmt.Errorf("share %q: mode %q is not ro or rw", s.Name, s.Mode)
-		}
-		seen[s.Name] = true
-	}
-	for _, p := range c.Trusted {
-		if p.ID == "" {
-			return fmt.Errorf("a trusted entry has no peer id")
-		}
-	}
-	return nil
-}
-
 // Save writes config.json.
-func (c *Config) Save() error {
-	p, err := Path(fileName)
+func (c *Config) Save(dir string) error {
+	p, err := Path(dir, fileName)
 	if err != nil {
 		return err
 	}

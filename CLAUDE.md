@@ -21,7 +21,7 @@ and a package:
 
 | Name | Role |
 |------|------|
-| `transport` | The package. The surface an application uses. `internal/` today; public at step 4. |
+| `transport` | The package at the module root. The surface an application uses; everything else is `internal/`. |
 | `heimdall` | A relay node. Forwards encrypted bytes it cannot read. |
 | `bifrost` | The relay coordinator: places, meters and scales the fleet. Designed in `FLEET.md`, not built. |
 | `ratatoskr` | The test harness — `id`, `run`, `discover`, `connect`, `bench`, NAT diagnostics. Not a product. |
@@ -56,32 +56,38 @@ it is ever wanted; do not re-add any of it here.
 
 ## Current state
 
-**Steps 0 to 3 are done.** The transport works and has been measured.
+**Steps 0 to 4 are done.** The transport works, has been measured, and
+has the surface an application depends on.
 
-**Step 0** — `internal/transport` is a libp2p host with QUIC and TCP,
+**Step 0** — `transport` is a libp2p host with QUIC and TCP,
 Noise security and an Ed25519 identity.
 
 **Step 1** — `internal/config` owns the per-OS config directory (0700)
 and `config.json`; `internal/identity` owns `identity.key` (0600) and
 refuses to start when it is readable by other users. `ratatoskr id`
-prints the short fingerprint, `--full` the peer id. Two things easy to
-miss: the permission check is a no-op on Windows, whose Unix mode bits
-are synthetic and whose access control lives in ACLs; and `config.json`
-still carries `shares`, `trusted` and `aliases`, which nothing reads and
-which step 4 deletes — they are the application's.
+prints the short fingerprint, `--full` the peer id. Both take a
+directory, with `""` meaning the environment override or the per-OS
+default, so an embedding application says where its state lives rather
+than inheriting a variable it did not set. Easy to miss: the permission
+check is a no-op on Windows, whose Unix mode bits are synthetic and
+whose access control lives in ACLs.
 
 Set `RATATOSKR_CONFIG_DIR` to run two agents on one machine. The tests
 rely on it.
 
 **Step 2** — `internal/discovery` advertises and finds peers over mDNS
 (`_ratatoskr._udp`), re-advertising when this machine's addresses
-change. `run`, `discover` and `connect` work with no server and no
-Internet. Still open: the Windows and Linux runs, the firewall prompts,
-and the unplugged-router test — all now step 8.
+change. It pushes each answer to a callback, which is what `OnLAN` hands
+up. `run`, `discover` and `connect` work with no server and no Internet.
+Still open: the Windows and Linux runs, the firewall prompts, and the
+unplugged-router test — all now step 8.
 
-`transport.DialPeer` strips circuit addresses from the dial set. That is
-load-bearing, not tidiness: a peer found on the LAN must be reached on
-the LAN or not at all.
+**A LAN session stays on the LAN because the caller hands over the LAN
+addresses and nothing else.** Step 4 moved that rule out of `DialPeer`'s
+circuit-stripping and into `Connect(ctx, id, addrs)`: given addresses,
+those are the dial set. It is load-bearing rather than tidiness — a
+machine found here must be reached here or not at all — and
+`cmd/ratatoskr`'s `open()` is the worked example.
 
 **Step 3 was the step that could have failed.** `cmd/heimdall` is a
 circuit relay v2 node on a real VPS. The agent always enables AutoNAT
@@ -124,11 +130,29 @@ wrong twice over. And go-libp2p's relay has **no per-connection rate
 hook** — `WithLimit` is a byte cap and `BytesTransferred` carries no
 peer id — so the shaper needs a vendored copy of the hop.
 
-**Step 4 is next, and it is the seam.** `internal/transport` becomes
-`transport`; `PeerID`, `Path` and `Stream` become this package's own
-types; addresses become opaque strings the caller never parses. The
-check is mechanical: a consumer package compiles against it without
-importing libp2p. `PLAN.md` §2.1 has the exact surface.
+**Step 4 — the seam — is done.** `transport` is the module root's public
+package: `New(Config)`, `ID`, `Addrs`, `Connect`, `Open`, `Handle`,
+`Peers`, `PathTo`, `OnLAN`, `Close`, and the `PeerID`, `Stream` and
+`Path` types. `PLAN.md` §2.1 is the whole of it, `transport/api.go` is
+where it lives, and everything else in that package is below the seam
+and unexported. `transport/example_test.go` is the check and it is
+mechanical: its import block is `bufio context fmt io os time` plus this
+module, and if libp2p ever appears there the seam has leaked.
+
+Four things about it to know before touching it. `Config` carries `Dir`,
+**not a key** — a private key is a libp2p type, so naming one would
+force every caller to import libp2p, and the transport loads or
+generates `identity.key` itself. `RATATOSKR_DIAG` output lives in
+`transport/diag.go` and starts from `New`, because what it prints is
+below the seam and reaching it from outside meant exposing the host.
+`internal/wire` holds the protocol ids heimdall and the transport must
+agree on, because a wire constant written twice is one that will one day
+differ. And a protocol name is now a plain string the caller picks: the
+harness declares its own `echoProto` and `benchProto` the way any
+application would.
+
+**Step 5 is next**: `Watch(id) (<-chan Path, func())`, off the hooks
+`repair` already uses, replacing `bench`'s four-megabyte poll.
 
 Tailscale is cloned at `/Users/a2193/Documents/Personal/tailscale` — a
 sibling to read, not a dependency; nothing here imports it and
@@ -152,7 +176,7 @@ running anything there.
 A machine learns its public address two ways, and the difference is the
 whole of step 3. Asking a relay over `/ratatoskr/observed/1.0.0` names
 the port of a connection opened at startup, which on a carrier that
-renumbers is stale within minutes. `internal/transport/selfaddr.go`
+renumbers is stale within minutes. `transport/selfaddr.go`
 wraps libp2p's own QUIC socket through `quicreuse.OverrideListenUDP`,
 asks every reflector in `internal/stun` on it, and claims the replies
 before quic-go sees them — so what is offered is measured on the socket
@@ -207,7 +231,7 @@ make cross                      # all five targets from one machine
 make clean
 
 # tests, without internal/discovery
-RATATOSKR_NO_MDNS=1 go test ./internal/transport/ ./internal/config/ \
+RATATOSKR_NO_MDNS=1 go test ./transport/ ./internal/config/ \
     ./internal/identity/ ./cmd/... -count=1
 ```
 
@@ -220,7 +244,9 @@ is a design change, not a refactor.
   multiaddrs, circuits, DCUtR, AutoNAT, STUN, reservations, hole punches
   or mDNS — not in an exported identifier, not in a returned error, not
   in output a person reads. `RATATOSKR_DIAG=1` is the one exception and
-  it prints everything. `SPEC.md` §4, `PLAN.md` §2.3.
+  it prints everything. `SPEC.md` §4, `PLAN.md` §2.3. Since step 4 the
+  compiler enforces the shape of it — anything a consumer must not name
+  is in `internal/` — and `go doc ./transport` is the audit.
 - **`CGO_ENABLED=0`.** Enforced in the Makefile. It is what lets one
   machine cross-build every target, and the consumer inherits it through
   the module. This rules out every Go GUI toolkit, `mattn/go-sqlite3`
@@ -265,7 +291,7 @@ leaves the network. Falls back on either trigger: mDNS timed out, *or*
 the peer was found but the dial failed.
 
 **The path is never decided once.** LAN if the peer is here; otherwise
-the relay carries the session while `internal/transport/upgrade.go`
+the relay carries the session while `transport/upgrade.go`
 keeps re-dialling the peer directly, from both ends, every five seconds
 for as long as it stays relayed. Both ends time from the same event —
 the relayed connection — so their dials cross, which is what makes two

@@ -18,7 +18,7 @@ func TestNoMDNSStartsAndStops(t *testing.T) {
 	}
 	defer h.Close()
 
-	l, err := Start(h)
+	l, err := Start(h, nil)
 	if err != nil {
 		t.Fatalf("Start with mdns off: %v", err)
 	}

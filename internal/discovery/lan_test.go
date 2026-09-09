@@ -2,10 +2,10 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/achmadss/p2p-transport/internal/identity"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -26,12 +26,12 @@ func newHost(t *testing.T) host.Host {
 func TestTwoHostsFindEachOther(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 
-	la, err := Start(a)
+	la, err := Start(a, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer la.Close()
-	lb, err := Start(b)
+	lb, err := Start(b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,18 +40,38 @@ func TestTwoHostsFindEachOther(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, err := la.Find(ctx, b.ID().String()); err != nil {
+	if err := waitFor(ctx, la, b.ID()); err != nil {
 		t.Fatalf("a did not find b: %v", err)
 	}
-	if _, err := lb.Find(ctx, identity.Short(a.ID().String())); err != nil {
-		t.Fatalf("b did not find a by fingerprint: %v", err)
+	if err := waitFor(ctx, lb, a.ID()); err != nil {
+		t.Fatalf("b did not find a: %v", err)
+	}
+}
+
+// waitFor polls rather than plumbing a channel into the test. mDNS
+// answers in milliseconds; anything slower than the context is a
+// failure worth reporting as one.
+func waitFor(ctx context.Context, l *LAN, want peer.ID) error {
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		for _, p := range l.Peers() {
+			if p.ID == want {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s never answered on this network", want)
+		case <-tick.C:
+		}
 	}
 }
 
 // Hearing our own announcement back must not look like a second machine.
 func TestSelfIsNotAPeer(t *testing.T) {
 	h := newHost(t)
-	l, err := Start(h)
+	l, err := Start(h, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,34 +83,25 @@ func TestSelfIsNotAPeer(t *testing.T) {
 	}
 }
 
-func TestMatches(t *testing.T) {
+// found must reach the caller, because OnLAN above the seam is built on
+// it and nothing else tells an application a machine appeared.
+func TestFoundIsReported(t *testing.T) {
 	h := newHost(t)
-	id := h.ID()
-	full := id.String()
-
-	for _, want := range []string{full, identity.Short(full)} {
-		if !Matches(id, want) {
-			t.Errorf("%q did not match %s", want, full)
-		}
-	}
-	for _, want := range []string{"", "nope", full[:8], full + "x"} {
-		if Matches(id, want) {
-			t.Errorf("%q matched %s but should not have", want, full)
-		}
-	}
-}
-
-func TestFindGivesUp(t *testing.T) {
-	l, err := Start(newHost(t))
+	told := make(chan peer.ID, 1)
+	l, err := Start(h, func(info peer.AddrInfo) { told <- info.ID })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-
-	if _, err := l.Find(ctx, "AAAA-AAAA"); err == nil {
-		t.Fatal("Find returned a peer that does not exist")
+	other := newHost(t)
+	l.HandlePeerFound(peer.AddrInfo{ID: other.ID(), Addrs: other.Addrs()})
+	select {
+	case got := <-told:
+		if got != other.ID() {
+			t.Fatalf("told about %s, want %s", got, other.ID())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a peer was found and nobody was told")
 	}
 }

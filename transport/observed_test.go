@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -45,14 +46,14 @@ func TestUsableObservedRefusesWhatItCannotPromise(t *testing.T) {
 // from, because guessing it from another socket is the bug this replaces.
 func TestHandleObservedReportsTheDialingSocket(t *testing.T) {
 	server, client := newHost(t), newHost(t)
-	HandleObserved(server)
+	wire.HandleObserved(server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := client.Connect(ctx, peer.AddrInfo{ID: server.ID(), Addrs: server.Addrs()}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := client.NewStream(ctx, server.ID(), ObservedProto)
+	s, err := client.NewStream(ctx, server.ID(), wire.ObservedProto)
 	if err != nil {
 		t.Fatal(err)
 	}

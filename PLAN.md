@@ -44,7 +44,7 @@ type PeerID string                    // stable; survives restarts and address c
 func (id PeerID) Short() string        // for people
 
 type Config struct {
-    Key    crypto.PrivKey   // from internal/identity
+    Dir    string           // where identity.key lives; "" is the per-OS default
     Relays []string         // opaque tokens, from whoever runs the relay
     NoLAN  bool             // skip local discovery entirely
 }
@@ -83,6 +83,13 @@ func (p Path) BetterThan(other Path) bool
 That is the whole contract. It fits on a screen on purpose: a surface
 this small can be frozen, and a frozen surface is what lets the layer
 above be written against it without reading a line of what is below.
+
+There is no private key on this surface, and that is the one place this
+differs from the first draft of §2.1. A key is a libp2p type; naming one
+here would make every caller import libp2p to fill it in, which is the
+single thing step 4 exists to prevent. So the transport loads or
+generates the key in `Dir` and never hands it out, and `identity` stays
+`internal/`.
 
 An address is a **string the application never parses**. It comes out of
 `Addrs()` on one machine and goes into `Connect` on another, through
@@ -265,7 +272,7 @@ difference is the whole of the NAT problem.
 
 Asking a relay names the port of a connection opened at startup, which
 on a carrier that renumbers is stale within minutes. Instead
-`internal/transport/selfaddr.go` wraps libp2p's own QUIC socket, asks
+`transport/selfaddr.go` wraps libp2p's own QUIC socket, asks
 every reflector in `internal/stun` on it, and claims the replies before
 quic-go sees them. What `Addrs()` offers is therefore measured on the
 socket that actually punches, is never older than 27 seconds, and is a
@@ -433,21 +440,30 @@ p2p-transport/
 │   ├── ratatoskr/     test harness and diagnostics
 │   ├── heimdall/      relay node
 │   └── bifrost/       the coordinator — FLEET.md
+├── transport/         the package: the surface, the ladder, the
+│                      self-address measurement, the diagnostics view
 ├── internal/
-│   ├── transport/     the host, the ladder, self-address measurement
 │   ├── discovery/     mDNS
 │   ├── identity/      keypair, peer id
 │   ├── config/        per-OS paths, environment overrides, relays
 │   ├── stun/          address reflectors
+│   ├── wire/          protocol ids heimdall and the transport share
 │   ├── relay/         the vendored hop, with a per-subject shaper
 │   └── provision/     one adapter per VPS provider
 ├── scripts/           punch experiments with no libp2p in them
 ├── Makefile · SPEC.md · PLAN.md · TODO.md · FLEET.md · go.mod
 ```
 
-`transport` is `internal/` today because nothing outside the module
-imports it yet. Promoting it to a public package is the work of step 4,
-and is the point at which the surface in §2.1 stops being a plan.
+`transport/` is the module root's public package as of step 4; §2.1 is
+its whole exported surface and `example_test.go` beside it is the check,
+because its import block is every package a consumer has to name.
+Everything else is `internal/`, which is what makes the seam a rule the
+compiler enforces rather than a convention.
+
+`internal/wire` is the small exception the fleet will grow: the protocol
+identifiers two binaries in this module must agree on. Heimdall answers
+one of the transport's own protocols, and a wire constant written twice
+is a wire constant that will one day differ.
 
 `scripts/punch.py` is the same punch with no libp2p in it, and is the
 control every failure needs beside it. `scripts/punchpair.sh` runs both

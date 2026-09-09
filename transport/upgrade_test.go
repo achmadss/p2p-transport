@@ -99,7 +99,7 @@ func swap[T any](p *T, v T) func() {
 // what comes back must be its listen set, private addresses included.
 func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
 	a, b := newHost(t), newHost(t)
-	HandleAddrs(b)
+	handleAddrs(b)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

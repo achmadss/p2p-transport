@@ -15,7 +15,7 @@ import (
 
 	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/achmadss/p2p-transport/internal/identity"
-	"github.com/achmadss/p2p-transport/internal/transport"
+	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -78,7 +78,7 @@ environment (empty means the default):
 }
 
 func run() error {
-	id, err := identity.LoadOrCreate()
+	id, err := identity.LoadOrCreate("")
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func run() error {
 	// reports what that socket looks like from here, which is the one
 	// place it can be seen. Reading it costs one round trip and reveals
 	// nothing the relay did not already have to know.
-	transport.HandleObserved(h)
+	wire.HandleObserved(h)
 
 	addrs, err := peer.AddrInfoToP2pAddrs(&peer.AddrInfo{ID: h.ID(), Addrs: h.Addrs()})
 	if err != nil {

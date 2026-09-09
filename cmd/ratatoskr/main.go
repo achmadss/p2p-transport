@@ -11,17 +11,20 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/achmadss/p2p-transport/internal/config"
-	"github.com/achmadss/p2p-transport/internal/discovery"
 	"github.com/achmadss/p2p-transport/internal/identity"
-	"github.com/achmadss/p2p-transport/internal/transport"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/multiformats/go-multiaddr"
+	"github.com/achmadss/p2p-transport/transport"
+)
+
+// The harness registers its own protocols, the way any application
+// does: a name it picked, and no framing but its own. PLAN.md §3.3.
+const (
+	echoProto  = "/ratatoskr/echo/1.0.0"
+	benchProto = "/ratatoskr/bench/1.0.0"
 )
 
 const version = "0.0.1"
@@ -123,11 +126,11 @@ func usage() {
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR      where identity.key and config.json live
   RATATOSKR_RELAYS          comma-separated relays, overriding config.json
-  RATATOSKR_LAN_TIMEOUT     wait for mDNS                        (3s)
+  RATATOSKR_LAN_TIMEOUT     wait for the local network           (3s)
   RATATOSKR_LAN_HEAD_START  --via auto's LAN head start          (400ms)
   RATATOSKR_DIAL_TIMEOUT    whole connect attempt                (30s)
   RATATOSKR_BENCH_TIMEOUT   whole benchmark                      (10m)
-  RATATOSKR_PUNCH_WINDOW    wait for a hole punch                (90s)
+  RATATOSKR_PUNCH_WINDOW    wait for a direct path               (90s)
   RATATOSKR_UPGRADE_EVERY   retry the punch on a relayed peer      (5s)
   RATATOSKR_UPGRADE_DIAL    how long one retry may take            (5s)
   RATATOSKR_BENCH_MB        default benchmark size               (100)
@@ -147,7 +150,7 @@ environment (empty means the default):
 // long and nobody reads it correctly; it belongs in diagnostics, which
 // is what --full is. SPEC.md §4.
 func showID(full bool) error {
-	id, err := identity.LoadOrCreate()
+	id, err := identity.LoadOrCreate("")
 	if err != nil {
 		return err
 	}
@@ -155,7 +158,7 @@ func showID(full bool) error {
 		fmt.Println(id.Fingerprint())
 		return nil
 	}
-	dir, err := config.Dir()
+	dir, err := config.Dir("")
 	if err != nil {
 		return err
 	}
@@ -175,43 +178,111 @@ func via(args []string) string {
 	return "auto"
 }
 
-// start brings up this machine's host under its stored identity and any
-// relays its config names.
+// start brings up this machine's transport with whatever relays its
+// config names. The identity is the transport's business now: it loads
+// or generates the key in the config directory and never hands it out.
 func start() (*transport.Host, error) {
-	id, err := identity.LoadOrCreate()
+	r, err := relays()
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	relays := cfg.Relays
+	return transport.New(transport.Config{Relays: r})
+}
+
+// relays is where this machine keeps the heimdall nodes it may use:
+// config.json, with RATATOSKR_RELAYS overriding it whole. A relay is a
+// hundred characters of address that does not change between runs, so
+// it is a file rather than something retyped.
+//
+// Read once. Three callers want the same answer — the host that dials
+// them, `run` deciding whether to print an id worth reaching from
+// another network, and `dialRelay` refusing a path that was never
+// configured — and reading the file three times to answer one question
+// invites the three to disagree.
+//
+// Nothing above the seam does this. `transport.New` is handed the list
+// in code; where an application keeps it is the application's.
+var relays = sync.OnceValues(func() ([]string, error) {
 	if env := config.List("RATATOSKR_RELAYS"); len(env) > 0 {
-		relays = env
+		return env, nil
 	}
-	return transport.New(id.PrivateKey(), relays)
+	cfg, err := config.Load("")
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Relays, nil
+})
+
+// configured answers the two callers that only want to know whether
+// there is a relay at all. Both run after start(), which has already
+// refused a config.json that does not parse.
+func configured() bool {
+	r, _ := relays()
+	return len(r) > 0
+}
+
+// lanPeers is what OnLAN has reported so far.
+//
+// The transport pushes; the harness remembers. Keeping the list here
+// rather than below the seam is the point of OnLAN — matching a
+// fingerprint a person typed is the application's question, and layer 4
+// has no business holding a lookup table for it.
+type lanPeers struct {
+	mu   sync.Mutex
+	seen map[transport.PeerID][]string
+}
+
+func watchLAN(h *transport.Host) *lanPeers {
+	l := &lanPeers{seen: map[transport.PeerID][]string{}}
+	h.OnLAN(func(id transport.PeerID, addrs []string) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.seen[id] = addrs
+	})
+	return l
+}
+
+func (l *lanPeers) all() map[transport.PeerID][]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[transport.PeerID][]string, len(l.seen))
+	for k, v := range l.seen {
+		out[k] = v
+	}
+	return out
+}
+
+// find waits for a machine whose id or fingerprint matches want. It
+// polls rather than plumbing a channel through every caller; answers
+// arrive in milliseconds and the caller is a person at a prompt.
+func (l *lanPeers) find(ctx context.Context, want string) (transport.PeerID, []string, error) {
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		for id, addrs := range l.all() {
+			if string(id) == want || id.Short() == want {
+				return id, addrs, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil, fmt.Errorf("no machine matching %q answered on this network", want)
+		case <-tick.C:
+		}
+	}
 }
 
 // run serves this machine. It answers the echo and benchmark protocols
 // only, which is enough to prove a peer reached us and over which path;
 // an application registers its own.
 func run() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
 	h, err := start()
 	if err != nil {
 		return err
 	}
 	defer h.Close()
 
-	diagCtx, stopDiag := context.WithCancel(context.Background())
-	defer stopDiag()
-	diagnose(diagCtx, h)
-
-	h.Handle(transport.BenchProto, func(s network.Stream) {
+	h.Handle(benchProto, func(s transport.Stream) {
 		defer s.Close()
 		n, err := io.Copy(io.Discard, s)
 		if err != nil {
@@ -221,23 +292,16 @@ func run() error {
 		fmt.Fprintf(s, "%d\n", n)
 	})
 
-	h.Handle(transport.EchoProto, func(s network.Stream) {
+	h.Handle(echoProto, func(s transport.Stream) {
 		defer s.Close()
-		c := transport.Describe(s.Conn())
-		fmt.Printf("%s connected over %s\n", identity.Short(c.Peer.String()), c.Path)
+		fmt.Printf("%s connected over %s\n", s.Peer().Short(), s.Path())
 		if _, err := io.Copy(s, s); err != nil {
 			fmt.Fprintln(os.Stderr, "stream:", err)
 		}
 	})
 
-	lan, err := discovery.Start(h.Host())
-	if err != nil {
-		return err
-	}
-	defer lan.Close()
-
-	fmt.Printf("serving as %s on this network\n", identity.Short(h.ID().String()))
-	if len(cfg.Relays) > 0 || len(config.List("RATATOSKR_RELAYS")) > 0 {
+	fmt.Printf("serving as %s on this network\n", h.ID().Short())
+	if configured() {
 		fmt.Printf("from another network, connect to:\n   %s\n", h.ID())
 	}
 	fmt.Println("waiting. ctrl-c to stop.")
@@ -258,24 +322,19 @@ func discover(full bool) error {
 	}
 	defer h.Close()
 
-	lan, err := discovery.Start(h.Host())
-	if err != nil {
-		return err
-	}
-	defer lan.Close()
-
+	lan := watchLAN(h)
 	time.Sleep(lanTimeout)
 
-	peers := lan.Peers()
+	peers := lan.all()
 	if len(peers) == 0 {
 		fmt.Println("no machines found on this network")
 		return nil
 	}
-	for _, p := range peers {
-		fmt.Printf("%s  local network\n", identity.Short(p.ID.String()))
+	for id, addrs := range peers {
+		fmt.Printf("%s  local network\n", id.Short())
 		if full {
-			fmt.Println("  ", p.ID)
-			for _, a := range p.Addrs {
+			fmt.Println("  ", id)
+			for _, a := range addrs {
 				fmt.Println("   ", a)
 			}
 		}
@@ -293,23 +352,16 @@ func connect(want, path string) error {
 	}
 	defer h.Close()
 
-	lan, err := discovery.Start(h.Host())
-	if err != nil {
-		return err
-	}
-	defer lan.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 	defer cancel()
 
-	s, err := open(ctx, h, lan, want, path, transport.EchoProto)
+	s, err := open(ctx, h, watchLAN(h), want, path, echoProto)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 
-	c := transport.Describe(s.Conn())
-	fmt.Printf("connected to %s over %s\n", identity.Short(c.Peer.String()), c.Path)
+	fmt.Printf("connected to %s over %s\n", s.Peer().Short(), s.Path())
 
 	const msg = "ratatoskr says hello\n"
 	if _, err := io.WriteString(s, msg); err != nil {
@@ -333,7 +385,7 @@ func connect(want, path string) error {
 // machine on this network should be reached on this network: nothing
 // leaves it, and it is faster. The relay is the fallback, never the
 // first choice. PLAN.md §5.
-func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path string, proto protocol.ID) (network.Stream, error) {
+func open(ctx context.Context, h *transport.Host, lan *lanPeers, want, path, proto string) (transport.Stream, error) {
 	switch path {
 	case "lan", "relay", "auto":
 	default:
@@ -346,17 +398,22 @@ func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path
 			wait = lanHeadStart
 		}
 		head, cancel := context.WithTimeout(ctx, wait)
-		info, err := lan.Find(head, want)
+		id, addrs, err := lan.find(head, want)
 		cancel()
 
 		switch {
 		case err == nil:
-			s, dialErr := h.DialPeer(ctx, info, proto)
+			// Only the addresses this network answered with. Handing
+			// over exactly those is what keeps a session found here
+			// from leaving here — the relay is never in this dial set,
+			// so a failure is a real failure rather than a quiet trip
+			// through heimdall. PLAN.md §5.3.
+			dialErr := h.Connect(ctx, id, addrs)
 			if dialErr == nil {
-				return s, nil
+				return h.Open(ctx, id, proto)
 			}
 			// Found but unreachable is a fallback trigger, not a dead
-			// end: the peer may have moved networks mid-announcement.
+			// end: the machine may have moved networks mid-announcement.
 			if path == "lan" {
 				return nil, dialErr
 			}
@@ -368,34 +425,25 @@ func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path
 	return dialRelay(ctx, h, want, proto)
 }
 
-// dialRelay reaches a machine through heimdall. Learning a peer's
-// address is the application's job, so here the circuit address is built
-// from a configured relay plus a full peer id.
-func dialRelay(ctx context.Context, h *transport.Host, want string, proto protocol.ID) (network.Stream, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, err
-	}
-	if env := config.List("RATATOSKR_RELAYS"); len(env) > 0 {
-		cfg.Relays = env
-	}
-	if len(cfg.Relays) == 0 {
+// dialRelay reaches a machine the local network did not answer for.
+//
+// It hands over no addresses at all, which is how a caller says "use
+// whatever you know": the transport falls back to the relays it was
+// configured with. A fingerprint cannot be used here — nothing on this
+// network has offered the full id to match it against, and a relay is
+// given an id rather than asked to search.
+func dialRelay(ctx context.Context, h *transport.Host, want, proto string) (transport.Stream, error) {
+	if !configured() {
 		return nil, fmt.Errorf("no machine matching %q on this network, and no relay configured", want)
 	}
-	id, err := peer.Decode(want)
-	if err != nil {
+	if len(want) < 20 {
 		return nil, fmt.Errorf("no machine matching %q on this network, and a relay connection needs the full machine id rather than a fingerprint", want)
 	}
-
-	var addrs []multiaddr.Multiaddr
-	for _, r := range cfg.Relays {
-		a, err := multiaddr.NewMultiaddr(r + "/p2p-circuit")
-		if err != nil {
-			return nil, fmt.Errorf("bad relay %q: %w", r, err)
-		}
-		addrs = append(addrs, a)
+	id := transport.PeerID(want)
+	if err := h.Connect(ctx, id, nil); err != nil {
+		return nil, err
 	}
-	return h.DialRelayed(ctx, peer.AddrInfo{ID: id, Addrs: addrs}, proto)
+	return h.Open(ctx, id, proto)
 }
 
 // size reads --mb. 100 MB is long enough to leave the slow start behind
@@ -431,24 +479,18 @@ func bench(want, path string, mb int64) error {
 	}
 	defer h.Close()
 
-	lan, err := discovery.Start(h.Host())
-	if err != nil {
-		return err
-	}
-	defer lan.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), benchTimeout)
 	defer cancel()
 
-	s, err := open(ctx, h, lan, want, path, transport.BenchProto)
+	s, err := open(ctx, h, watchLAN(h), want, path, benchProto)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 
-	peerID := s.Conn().RemotePeer()
-	first := transport.Describe(s.Conn()).Path
-	fmt.Printf("connected to %s over %s\n", identity.Short(peerID.String()), first)
+	peerID := s.Peer()
+	first := s.Path()
+	fmt.Printf("connected to %s over %s\n", peerID.Short(), first)
 
 	total := mb << 20
 	if err := transfer(ctx, h, s, peerID, mb, total); err != nil {
@@ -473,13 +515,12 @@ func bench(want, path string, mb int64) error {
 	if upgraded == transport.PathRelay || upgraded == transport.PathUnknown {
 		return nil
 	}
-	s2, err := h.Open(ctx, peerID, transport.BenchProto)
+	s2, err := h.Open(ctx, peerID, benchProto)
 	if err != nil {
 		return fmt.Errorf("second pass: %w", err)
 	}
 	defer s2.Close()
-	again := transport.Describe(s2.Conn()).Path
-	fmt.Printf("second pass, all of it over %s\n", again)
+	fmt.Printf("second pass, all of it over %s\n", s2.Path())
 	return transfer(ctx, h, s2, peerID, mb, total)
 }
 
@@ -501,9 +542,9 @@ func bench(want, path string, mb int64) error {
 // from start to finish. The granularity is one check interval, and that
 // is less a limitation than a preview: an application that reads in
 // ranges is already one request per range, so it gets this for free.
-func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total int64) error {
+func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id transport.PeerID, mb, total int64) error {
 	start := time.Now()
-	path := transport.Describe(s.Conn()).Path
+	path := s.Path()
 	used := []string{string(path)}
 	sentOnStream := int64(0)
 
@@ -525,7 +566,7 @@ func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.
 		if err := confirm(s, sentOnStream); err != nil {
 			return err
 		}
-		next, err := h.Open(ctx, id, transport.BenchProto)
+		next, err := h.Open(ctx, id, benchProto)
 		if err != nil {
 			// The path improved and the new stream would not open. The
 			// old connection is finished, so there is nothing left to
@@ -533,7 +574,7 @@ func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.
 			return fmt.Errorf("moving from %s to %s after %s: %w", path, best, human(sent), err)
 		}
 		s, sentOnStream = next, 0
-		path = transport.Describe(s.Conn()).Path
+		path = s.Path()
 		fmt.Printf("moved from %s to %s after %s\n", used[len(used)-1], path, human(sent))
 		used = append(used, string(path))
 	}
@@ -556,7 +597,7 @@ func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.
 // confirm half-closes a stream and checks the far end counted every
 // byte that went down it. The far end counts to end of stream, so this
 // is also what ends one.
-func confirm(s network.Stream, want int64) error {
+func confirm(s transport.Stream, want int64) error {
 	defer s.Close()
 	if err := s.CloseWrite(); err != nil {
 		return fmt.Errorf("half close: %w", err)
@@ -582,7 +623,7 @@ func confirm(s network.Stream, want int64) error {
 // It watches rather than acts: the punching is the transport's, it runs
 // on both ends for as long as the peer is relayed, and it would go on
 // whether or not anybody was measuring it.
-func watchUpgrade(h *transport.Host, id peer.ID) transport.Path {
+func watchUpgrade(h *transport.Host, id transport.PeerID) transport.Path {
 	start := time.Now()
 	deadline := time.After(punchWindow)
 	tick := time.NewTicker(250 * time.Millisecond)

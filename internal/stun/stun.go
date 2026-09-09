@@ -11,7 +11,7 @@
 // reports belongs to the socket that asked, so a throwaway socket
 // learns nothing about libp2p's — which is why transport/selfaddr.go
 // wraps quic-go's own socket before asking, and why asking the relay
-// over transport.ObservedProto is the other half rather than the
+// over wire.ObservedProto is the other half rather than the
 // answer: the relay names a door opened at startup, and this names one
 // opened now.
 package stun

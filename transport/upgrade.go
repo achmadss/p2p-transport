@@ -11,6 +11,7 @@ import (
 
 	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/achmadss/p2p-transport/internal/identity"
+	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -84,7 +85,7 @@ func (t *Host) watchForRelayed() {
 // a reason not to, and the last connection closing is a different
 // problem from a worse one being left behind.
 func (t *Host) repair(id peer.ID) Path {
-	p := t.PathTo(id)
+	p := t.pathTo(id)
 	switch p {
 	case PathRelay:
 		go t.upgrade(id) // something better may still be opened
@@ -125,7 +126,7 @@ func (t *Host) restore(id peer.ID) {
 	defer tick.Stop()
 	deadline := time.After(restoreFor)
 	for {
-		if t.PathTo(id) != PathUnknown {
+		if t.pathTo(id) != PathUnknown {
 			return // it came back, by our dial or by theirs
 		}
 		t.redial(id)
@@ -185,7 +186,7 @@ func (t *Host) upgrade(id peer.ID) {
 			return
 		case <-tick.C:
 		}
-		switch p := t.PathTo(id); p {
+		switch p := t.pathTo(id); p {
 		case PathDirect, PathLAN:
 			// Someone's dial landed — ours, theirs, or DCUtR's. Which
 			// one is not worth finding out; the path is measured from
@@ -249,11 +250,11 @@ func (t *Host) dialDirect(id peer.ID) {
 	}
 }
 
-// HandleAddrs answers AddrsProto with this machine's own addresses, one
+// handleAddrs answers AddrsProto with this machine's own addresses, one
 // per line. Circuits are stripped here as well as on the reading side,
 // because a peer should not have to filter what it was never owed.
-func HandleAddrs(h host.Host) {
-	h.SetStreamHandler(AddrsProto, func(s network.Stream) {
+func handleAddrs(h host.Host) {
+	h.SetStreamHandler(wire.AddrsProto, func(s network.Stream) {
 		defer s.Close()
 		s.SetDeadline(time.Now().Add(10 * time.Second))
 		for _, a := range directOnly(h.Addrs()) {
@@ -274,7 +275,7 @@ func HandleAddrs(h host.Host) {
 // protocol, or a relay too slow to answer within the tick, leaves the
 // peerstore's addresses to be dialled on their own.
 func (t *Host) askAddrs(ctx context.Context, id peer.ID) []multiaddr.Multiaddr {
-	s, err := t.Open(ctx, id, AddrsProto)
+	s, err := t.openStream(ctx, id, wire.AddrsProto)
 	if err != nil {
 		return nil
 	}

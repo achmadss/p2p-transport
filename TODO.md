@@ -51,19 +51,31 @@ added to `HEIMDALL_ANNOUNCE`.
 
 ---
 
-## Step 4 — The seam
+## Step 4 — The seam ✅ 9 Sep 2026
 
-- [ ] Promote `internal/transport` to `transport` at the module root
-- [ ] `PeerID`, `Path` and `Stream` as this package's own types
-- [ ] Protocol names are plain strings; addresses are opaque strings
-- [ ] `New(Config)` carrying key, relays and `NoLAN`
-- [ ] Retire `Dial`, `DialPeer`, `DialRelayed` and `Host()`
-- [ ] `OnLAN` replaces reaching into `internal/discovery`
-- [ ] Strip `shares`, `trusted` and `aliases` from `config.json`
-- [ ] One `example_test.go` using only the exported surface
+- [x] Promote `internal/transport` to `transport` at the module root
+- [x] `PeerID`, `Path` and `Stream` as this package's own types
+- [x] Protocol names are plain strings; addresses are opaque strings
+- [x] `New(Config)` carrying the config directory, relays and `NoLAN`
+- [x] Retire `Dial`, `DialPeer`, `DialRelayed`, `Describe` and `Host()`
+- [x] `OnLAN` replaces reaching into `internal/discovery`
+- [x] Strip `shares`, `trusted` and `aliases` from `config.json`
+- [x] One `example_test.go` using only the exported surface
 
-**Check:** a package that imports `transport` and nothing else opens a
-stream and reads a path, with no libp2p import the caller wrote.
+**Check: pass.** `transport/example_test.go` is `package transport_test`
+and its import block is `bufio context fmt io os time` plus this module.
+It connects, echoes and reads a path.
+
+`Config` carries `Dir` rather than a key. A private key is a libp2p type
+and naming one would have made every caller import libp2p to fill it in,
+which is the one thing this step exists to prevent; `PLAN.md` §2.1 says
+so now. The transport loads or generates `identity.key` in `Dir`.
+
+Two things moved rather than being written: `RATATOSKR_DIAG` output is
+`transport/diag.go`, because what it prints is below the seam and
+reaching it from the harness would have meant exposing the host to do
+it; and the protocol ids heimdall shares are `internal/wire`, because a
+wire constant written twice is one that will one day differ.
 
 ## Step 5 — Path changes are pushed, not polled
 

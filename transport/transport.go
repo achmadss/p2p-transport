@@ -1,10 +1,18 @@
-// Package transport carries bytes between two peers over the best path
-// it can find.
+// Package transport carries bytes between two machines over the best
+// path it can find, and tells the caller only what the caller genuinely
+// needs: who the far end is, a stream to it, and which path the bytes
+// are taking.
 //
-// It is built on libp2p. The Noise handshake proves who the remote peer
-// is, so there is no separate challenge-response here; see PLAN.md §4.
-// What a proven peer may then do is not asked here at all: identity is
-// this layer's, authorisation is the application's.
+// api.go is the whole surface. Everything else in this package is below
+// the seam — an application never names a transport, a handshake, an
+// address format or a traversal technique, and never imports libp2p to
+// use this. PLAN.md §2 is the contract; SPEC.md §4 lists the words that
+// do not cross it.
+//
+// The handshake proves who the far end is, so there is no separate
+// challenge-response. What a proven machine may then do is not asked
+// here at all: identity is this layer's, authorisation is the
+// application's.
 package transport
 
 import (
@@ -20,8 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/achmadss/p2p-transport/internal/discovery"
+	"github.com/achmadss/p2p-transport/internal/identity"
+	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -34,57 +44,6 @@ import (
 	manet "github.com/multiformats/go-multiaddr/net"
 )
 
-// EchoProto is the step 0 scaffold. It exists to prove a Noise-secured
-// QUIC stream carries bytes end to end, and is deleted once the real
-// application's own protocols replace it. PLAN.md §3.3: a protocol
-// name is a string the caller picks, and this package registers only
-// the few it needs for its own business.
-const EchoProto = protocol.ID("/ratatoskr/echo/1.0.0")
-
-// BenchProto measures a path. The far end sinks bytes and reports how
-// many arrived; sending them back would double the relay's bill and
-// halve the number. A diagnostic, not part of the surface an
-// application uses.
-const BenchProto = protocol.ID("/ratatoskr/bench/1.0.0")
-
-// ObservedProto asks the far end for the address it sees us at.
-//
-// A reflector on any other socket cannot answer this. A NAT that keeps
-// the mapping endpoint-independent but renumbers the port gives each
-// socket its own external port, so the port a throwaway STUN socket
-// learns is not the port libp2p punches from — which is exactly what a
-// phone hotspot does, and exactly why the punch was one-sided. Asked on
-// the connection itself, the answer is the QUIC socket's own address.
-//
-// One observer is enough here only because the mapping class is
-// established separately by `ratatoskr natcheck`: on an endpoint-
-// independent NAT the address heimdall sees is the address any peer may
-// use, and on any other kind no single address exists to be found.
-const ObservedProto = protocol.ID("/ratatoskr/observed/1.0.0")
-
-// AddrsProto asks a peer where it is listening, in its own words.
-//
-// identify already carries this and the receiving side throws half of
-// it away: it drops every non-public address when the connection they
-// arrived on is public, and a circuit through a relay on a VPS is a
-// public address (go-libp2p `identify.filterAddrs`). So two machines on
-// one LAN that meet over heimdall are never told each other's LAN
-// address — the one dial certain to succeed is the one dial never
-// tried. DCUtR does not rescue it either; it only ever direct-dials
-// addresses it considers public.
-const AddrsProto = protocol.ID("/ratatoskr/addrs/1.0.0")
-
-// Path is how a session reached the far end. It is measured from a live
-// connection, never guessed. PLAN.md §7.
-type Path string
-
-const (
-	PathUnknown Path = "unknown"
-	PathLAN     Path = "lan"
-	PathDirect  Path = "direct"
-	PathRelay   Path = "relay"
-)
-
 // listenAddrs is every interface on an operating-system-assigned port.
 // QUIC is listed first so it is preferred; TCP stays for networks that
 // drop UDP.
@@ -95,10 +54,20 @@ var listenAddrs = []string{
 	"/ip6/::/tcp/0",
 }
 
-// Host is a libp2p node in either role. Ratatoskr is one binary that
-// serves and consumes, so there is no separate client type.
+// Host is this machine on the network, in both roles at once: it serves
+// the protocols registered on it and opens streams to other machines.
+// There is no separate client type, because no machine here is only one
+// of the two.
 type Host struct {
 	h host.Host
+
+	// lan is local discovery, started here rather than by the caller so
+	// that OnLAN is the only way anyone above sees it. Nil when Config
+	// turned it off.
+	lan *discovery.LAN
+
+	mu    sync.Mutex
+	onLAN []func(PeerID, []string)
 
 	// done stops the background work — measuring this machine's public
 	// addresses, and retrying the punch on a relayed peer — when the
@@ -119,16 +88,16 @@ type Host struct {
 	circuits []multiaddr.Multiaddr
 }
 
-// New starts a host under the given identity.
-//
-// The transport and security lists are explicit rather than left to
-// libp2p's defaults. The defaults would also enable WebTransport and TLS,
-// and which transports exist is a decision of PLAN.md §3, not something
-// to inherit from a dependency's default and discover later.
-// Relays are heimdall addresses. With none the host is LAN-only, which
-// is a complete way to run and not a degraded one.
-func New(key crypto.PrivKey, relays []string) (*Host, error) {
-	infos, err := ParseAddrs(relays)
+// New starts this machine's transport, loading or generating its
+// identity in Config.Dir. Close stops it.
+func New(cfg Config) (*Host, error) {
+	id, err := identity.LoadOrCreate(cfg.Dir)
+	if err != nil {
+		return nil, err
+	}
+	key := id.PrivateKey()
+	relays := cfg.Relays
+	infos, err := parseAddrs(relays)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +107,11 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	// option itself.
 	mine, socketOpt := ownSocket()
 
+	// The transport and security lists are explicit rather than left to
+	// libp2p's defaults. The defaults would also enable WebTransport and
+	// TLS, and which transports exist is a decision of PLAN.md §3, not
+	// something to inherit from a dependency's default and discover
+	// later.
 	opts := []libp2p.Option{
 		libp2p.Identity(key),
 		libp2p.ListenAddrStrings(listenAddrs...),
@@ -209,8 +183,8 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start host: %w", err)
 	}
-	HandleObserved(h)
-	HandleAddrs(h)
+	wire.HandleObserved(h)
+	handleAddrs(h)
 	// ParseAddrs has already refused anything unparseable above, so a
 	// relay that fails here is one the circuit suffix broke, which
 	// cannot happen for an address that parsed.
@@ -231,7 +205,27 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		go holdRelays(h, infos, &observed)
 		go t.refreshMeasured(mine, &measured)
 	}
+	if !cfg.NoLAN {
+		lan, err := discovery.Start(h, t.found)
+		if err != nil {
+			h.Close()
+			return nil, err
+		}
+		t.lan = lan
+	}
+	t.diagnose()
 	return t, nil
+}
+
+// found fans one mDNS answer out to whoever registered for it.
+func (t *Host) found(info peer.AddrInfo) {
+	t.mu.Lock()
+	fns := append(t.onLAN[:0:0], t.onLAN...)
+	t.mu.Unlock()
+	addrs := p2pAddrs(info)
+	for _, fn := range fns {
+		fn(PeerID(info.ID.String()), addrs)
+	}
 }
 
 // known reads one of the address stores. Nothing is published before
@@ -306,7 +300,7 @@ func holdRelays(h host.Host, relays []peer.AddrInfo, observed *atomic.Value) {
 // worse drive, not a broken one, and it is honest — advertising a
 // guessed address costs every peer a dial that can never arrive.
 func askObserved(ctx context.Context, h host.Host, relay peer.ID) (multiaddr.Multiaddr, bool) {
-	s, err := h.NewStream(ctx, relay, ObservedProto)
+	s, err := h.NewStream(ctx, relay, wire.ObservedProto)
 	if err != nil {
 		return nil, false
 	}
@@ -317,17 +311,6 @@ func askObserved(ctx context.Context, h host.Host, relay peer.ID) (multiaddr.Mul
 		return nil, false
 	}
 	return usableObserved(string(b))
-}
-
-// HandleObserved answers ObservedProto with the address this connection
-// came from. Heimdall serves it; every agent also does, so two peers on
-// one LAN can name each other without a relay in the room.
-func HandleObserved(h host.Host) {
-	h.SetStreamHandler(ObservedProto, func(s network.Stream) {
-		defer s.Close()
-		s.SetDeadline(time.Now().Add(10 * time.Second))
-		io.WriteString(s, s.Conn().RemoteMultiaddr().String())
-	})
 }
 
 // punchFilter keeps a hole punch to an address family this machine can
@@ -487,14 +470,9 @@ func usableObserved(s string) (multiaddr.Multiaddr, bool) {
 	return ma, true
 }
 
-// Host exposes the libp2p host to packages that need to attach to it,
-// such as discovery. Nothing above the transport layer should reach for
-// this; it is here because mDNS advertises the host itself.
-func (t *Host) Host() host.Host { return t.h }
-
-// ParseAddrs turns full multiaddrs into peer records, failing on the
+// parseAddrs turns full multiaddrs into peer records, failing on the
 // first bad one rather than quietly dropping it.
-func ParseAddrs(addrs []string) ([]peer.AddrInfo, error) {
+func parseAddrs(addrs []string) ([]peer.AddrInfo, error) {
 	var out []peer.AddrInfo
 	for _, a := range addrs {
 		ma, err := multiaddr.NewMultiaddr(a)
@@ -508,51 +486,6 @@ func ParseAddrs(addrs []string) ([]peer.AddrInfo, error) {
 		out = append(out, *info)
 	}
 	return out, nil
-}
-
-// ID is this peer's identity, derived from its public key.
-func (t *Host) ID() peer.ID { return t.h.ID() }
-
-// Addrs are the full multiaddrs a remote peer can dial, identity
-// included. Diagnostics only: SPEC.md §4 keeps multiaddrs out of
-// ordinary user-facing output.
-func (t *Host) Addrs() ([]multiaddr.Multiaddr, error) {
-	return peer.AddrInfoToP2pAddrs(&peer.AddrInfo{ID: t.h.ID(), Addrs: t.h.Addrs()})
-}
-
-// Handle registers a handler for a protocol.
-func (t *Host) Handle(p protocol.ID, fn network.StreamHandler) {
-	t.h.SetStreamHandler(p, fn)
-}
-
-// Dial connects to a peer named by a full multiaddr and opens a stream.
-// The Noise handshake inside proves the far end holds the private key
-// for the peer id in that address; a mismatch fails the dial.
-func (t *Host) Dial(ctx context.Context, addr string, p protocol.ID) (network.Stream, error) {
-	ma, err := multiaddr.NewMultiaddr(addr)
-	if err != nil {
-		return nil, fmt.Errorf("bad address: %w", err)
-	}
-	info, err := peer.AddrInfoFromP2pAddr(ma)
-	if err != nil {
-		return nil, fmt.Errorf("address names no peer: %w", err)
-	}
-	return t.DialPeer(ctx, *info, p)
-}
-
-// DialPeer opens a stream to an already-located peer.
-//
-// Circuit addresses are dropped from the dial set. A peer found on the
-// local network must be reached over the local network or not at all —
-// silently relaying through heimdall would send bytes off a network the
-// user believed they never left. PLAN.md §5.
-func (t *Host) DialPeer(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
-	direct := directOnly(info.Addrs)
-	if len(direct) == 0 {
-		return nil, fmt.Errorf("no direct address for %s", info.ID)
-	}
-	info.Addrs = direct
-	return t.dial(ctx, info, p)
 }
 
 // directOnly drops circuit addresses. Two callers want this and want it
@@ -569,14 +502,18 @@ func directOnly(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 	return out
 }
 
-// Open starts a stream on a connection that already exists.
+// openStream starts a stream, dialling first if there is no connection.
 //
 // The path is whatever the connection manager considers best right now,
 // which after an upgrade is the direct connection rather than the relay
 // the session started on. That is the whole benefit of upgrading: a
 // stream opened later takes the better path without anything switching
 // over, and a stream opened earlier stays where it was born.
-func (t *Host) Open(ctx context.Context, id peer.ID, p protocol.ID) (network.Stream, error) {
+//
+// libp2p treats a relayed connection as limited and refuses streams on
+// it unless asked. This asks: a relayed path is slow and metered, but
+// it is a working path, and the alternative is no connection at all.
+func (t *Host) openStream(ctx context.Context, id peer.ID, p protocol.ID) (network.Stream, error) {
 	s, err := t.h.NewStream(network.WithAllowLimitedConn(ctx, "ratatoskr"), id, p)
 	if err != nil {
 		return nil, fmt.Errorf("open stream: %w", err)
@@ -584,33 +521,12 @@ func (t *Host) Open(ctx context.Context, id peer.ID, p protocol.ID) (network.Str
 	return s, nil
 }
 
-// DialRelayed reaches a peer through a relay. The caller has chosen to
-// leave the local network, so circuit addresses are kept.
-func (t *Host) DialRelayed(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
-	return t.dial(ctx, info, p)
-}
-
-func (t *Host) dial(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
-	if err := t.h.Connect(ctx, info); err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-	// libp2p treats a relayed connection as limited and refuses streams
-	// on it unless asked. Ratatoskr wants them: a relayed path is slow
-	// and metered, but it is a working path, and the alternative is no
-	// connection at all.
-	s, err := t.h.NewStream(network.WithAllowLimitedConn(ctx, "ratatoskr"), info.ID, p)
-	if err != nil {
-		return nil, fmt.Errorf("open stream: %w", err)
-	}
-	return s, nil
-}
-
-// PathTo reports the best way this machine currently reaches a peer,
+// pathTo reports the best way this machine currently reaches a peer,
 // across every open connection. An upgrade leaves the relayed
 // connection in place beside the new one, so the answer is the best of
 // them and not the first one found — which is how the upgrade is
 // observed rather than assumed.
-func (t *Host) PathTo(id peer.ID) Path {
+func (t *Host) pathTo(id peer.ID) Path {
 	best := PathUnknown
 	for _, c := range t.h.Network().ConnsToPeer(id) {
 		if p := pathOfConn(c); p.BetterThan(best) {
@@ -622,51 +538,13 @@ func (t *Host) PathTo(id peer.ID) Path {
 
 func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 
-// BetterThan ranks two measured paths against step 3's ladder: the LAN
-// if the peer is here, the Internet if it is not, the relay only when
-// neither can be opened, and unknown below all three.
-//
-// It exists so that a transfer already running can ask whether moving
-// is worth a new stream. PathTo has the same order built into it, and
-// this is where the order is written down.
-func (p Path) BetterThan(other Path) bool { return rank(p) < rank(other) }
-
-func rank(p Path) int {
-	switch p {
-	case PathLAN:
-		return 0
-	case PathDirect:
-		return 1
-	case PathRelay:
-		return 2
-	}
-	return 3
-}
-
+// Close stops everything this host started, in the order it started it.
 func (t *Host) Close() error {
 	t.closeOnce.Do(func() { close(t.done) })
-	return t.h.Close()
-}
-
-// Conn describes one live connection, as measured.
-type Conn struct {
-	Peer      peer.ID
-	Addr      multiaddr.Multiaddr
-	Transport string // quic | tcp | ws
-	Path      Path
-}
-
-// Describe reports how a connection actually reached its far end. It
-// reads the live connection rather than the intent that opened it,
-// because presence and path are different questions. PLAN.md §7.
-func Describe(c network.Conn) Conn {
-	addr := c.RemoteMultiaddr()
-	return Conn{
-		Peer:      c.RemotePeer(),
-		Addr:      addr,
-		Transport: transportOf(addr),
-		Path:      pathOf(addr),
+	if t.lan != nil {
+		t.lan.Close()
 	}
+	return t.h.Close()
 }
 
 func transportOf(a multiaddr.Multiaddr) string {

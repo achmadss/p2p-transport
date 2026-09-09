@@ -13,9 +13,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
-	"github.com/achmadss/p2p-transport/internal/identity"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -29,7 +27,8 @@ const service = "_ratatoskr._udp"
 // LAN advertises this host on the local network and remembers the peers
 // it hears from.
 type LAN struct {
-	h host.Host
+	h     host.Host
+	found func(peer.AddrInfo) // told about every peer heard from
 
 	mu   sync.Mutex
 	seen map[peer.ID][]peer.AddrInfo // one entry per peer, latest addrs
@@ -40,6 +39,10 @@ type LAN struct {
 }
 
 // Start begins advertising and listening. Close stops both.
+//
+// found is called for each peer heard from, so a caller is told rather
+// than having to poll. Nil is allowed: a caller that only wants the
+// list at the end reads Peers.
 //
 // RATATOSKR_NO_MDNS returns a LAN that finds nothing and advertises
 // nothing, for a machine where multicast is not merely useless but
@@ -54,8 +57,8 @@ type LAN struct {
 // The cost is exactly what it says: no peers found on this network, and
 // this machine invisible to peers on it. Everything reached through a
 // relay or a punched address still works.
-func Start(h host.Host) (*LAN, error) {
-	l := &LAN{h: h, seen: map[peer.ID][]peer.AddrInfo{}, done: make(chan struct{})}
+func Start(h host.Host, found func(peer.AddrInfo)) (*LAN, error) {
+	l := &LAN{h: h, found: found, seen: map[peer.ID][]peer.AddrInfo{}, done: make(chan struct{})}
 	if os.Getenv("RATATOSKR_NO_MDNS") != "" {
 		fmt.Fprintln(os.Stderr, "mdns off: this machine will not find or be found on the LAN")
 		close(l.done)
@@ -129,8 +132,11 @@ func (l *LAN) HandlePeerFound(info peer.AddrInfo) {
 		return // our own announcement, echoed back
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.seen[info.ID] = []peer.AddrInfo{info}
+	l.mu.Unlock()
+	if l.found != nil {
+		l.found(info)
+	}
 }
 
 // Peers is what has been heard so far, in no particular order.
@@ -142,33 +148,6 @@ func (l *LAN) Peers() []peer.AddrInfo {
 		out = append(out, v[0])
 	}
 	return out
-}
-
-// Find waits for a peer whose id or short fingerprint matches want. It
-// polls rather than plumbing a channel to every caller; mDNS answers in
-// milliseconds and the caller is a person waiting at a prompt.
-func (l *LAN) Find(ctx context.Context, want string) (peer.AddrInfo, error) {
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		for _, p := range l.Peers() {
-			if Matches(p.ID, want) {
-				return p, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return peer.AddrInfo{}, fmt.Errorf("no machine matching %q answered on this network", want)
-		case <-tick.C:
-		}
-	}
-}
-
-// Matches accepts either the full peer id or the short fingerprint that
-// `ratatoskr id` prints.
-func Matches(id peer.ID, want string) bool {
-	s := id.String()
-	return s == want || identity.Short(s) == want
 }
 
 func (l *LAN) Close() error {
