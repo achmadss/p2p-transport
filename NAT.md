@@ -11,8 +11,14 @@ between them. Entries are in the order they happened, so an earlier
 paragraph may be corrected by a later one — where that happens it says
 so rather than being quietly rewritten.
 
+Two notes for a later reader. `SPEC.md` was renumbered on 9 Sep 2026 when
+this repository narrowed to layer 4; citations below have been repointed,
+but forward references to "the File API" mean the application built on
+this transport, which now lives elsewhere. Nothing else in the entries has
+been rewritten.
+
 The state as of 8 Sep 2026: two machines on different carriers connect,
-transfer and verify their bytes over heimdall, which `SPEC.md` §1 permits
+transfer and verify their bytes over heimdall, which `SPEC.md` §2 permits
 and the owner has confirmed is not a failure. A direct path between a
 phone hotspot and a home line has been opened once, at 251 ms, on an
 agent seconds old, and never on one minutes old. Both halves of the
@@ -438,7 +444,7 @@ socket, and a connection punched outside it cannot be handed back.
 **Step 3 stays open for the direct path, and the relay is not what is
 open about it.** A phone on a public network reaching a laptop at home
 is the ordinary way this product will be used, not an edge case, and it
-works today: the relay carries it, `SPEC.md` §1 permits exactly that,
+works today: the relay carries it, `SPEC.md` §2 permits exactly that,
 and a transfer that goes over heimdall is a transfer that happened. What
 §6 forbids is the relay becoming the *normal* path, and on this
 carrier it currently is. So the measurements above are a problem
@@ -674,7 +680,7 @@ routable address, forwards UDP for two nodes that failed to meet.
 `discoverUDPRelayPathsInterval` is 30s. That is worth naming here
 because the bytes stay on the user's own hardware, so it costs the
 operator nothing and does not make heimdall the normal data path that
-`SPEC.md` §6 forbids. It is the user's desktop carrying it for the
+`SPEC.md` §2 forbids. It is the user's desktop carrying it for the
 user's phone.
 
 ### The decision, written before building it

@@ -1,9 +1,10 @@
-// Package transport carries Ratatoskr's bytes between two peers.
+// Package transport carries bytes between two peers over the best path
+// it can find.
 //
 // It is built on libp2p. The Noise handshake proves who the remote peer
-// is, so there is no separate challenge-response here; see PLAN.md §5.
-// What a proven peer may then read is a question for the trust list and
-// for mimir-signed grants, and is decided a layer above this one.
+// is, so there is no separate challenge-response here; see PLAN.md §4.
+// What a proven peer may then do is not asked here at all: identity is
+// this layer's, authorisation is the application's.
 package transport
 
 import (
@@ -35,12 +36,15 @@ import (
 
 // EchoProto is the step 0 scaffold. It exists to prove a Noise-secured
 // QUIC stream carries bytes end to end, and is deleted once the real
-// control and transfer protocols of PLAN.md §9 replace it.
+// application's own protocols replace it. PLAN.md §3.3: a protocol
+// name is a string the caller picks, and this package registers only
+// the few it needs for its own business.
 const EchoProto = protocol.ID("/ratatoskr/echo/1.0.0")
 
 // BenchProto measures a path. The far end sinks bytes and reports how
 // many arrived; sending them back would double the relay's bill and
-// halve the number. Deleted with EchoProto when the File API lands.
+// halve the number. A diagnostic, not part of the surface an
+// application uses.
 const BenchProto = protocol.ID("/ratatoskr/bench/1.0.0")
 
 // ObservedProto asks the far end for the address it sees us at.
@@ -71,7 +75,7 @@ const ObservedProto = protocol.ID("/ratatoskr/observed/1.0.0")
 const AddrsProto = protocol.ID("/ratatoskr/addrs/1.0.0")
 
 // Path is how a session reached the far end. It is measured from a live
-// connection, never guessed. PLAN.md §14.
+// connection, never guessed. PLAN.md §7.
 type Path string
 
 const (
@@ -119,7 +123,7 @@ type Host struct {
 //
 // The transport and security lists are explicit rather than left to
 // libp2p's defaults. The defaults would also enable WebTransport and TLS,
-// and which transports exist is a decision of PLAN.md §4, not something
+// and which transports exist is a decision of PLAN.md §3, not something
 // to inherit from a dependency's default and discover later.
 // Relays are heimdall addresses. With none the host is LAN-only, which
 // is a complete way to run and not a degraded one.
@@ -510,7 +514,7 @@ func ParseAddrs(addrs []string) ([]peer.AddrInfo, error) {
 func (t *Host) ID() peer.ID { return t.h.ID() }
 
 // Addrs are the full multiaddrs a remote peer can dial, identity
-// included. Diagnostics only: SPEC.md §30.4 keeps multiaddrs out of
+// included. Diagnostics only: SPEC.md §4 keeps multiaddrs out of
 // ordinary user-facing output.
 func (t *Host) Addrs() ([]multiaddr.Multiaddr, error) {
 	return peer.AddrInfoToP2pAddrs(&peer.AddrInfo{ID: t.h.ID(), Addrs: t.h.Addrs()})
@@ -541,7 +545,7 @@ func (t *Host) Dial(ctx context.Context, addr string, p protocol.ID) (network.St
 // Circuit addresses are dropped from the dial set. A peer found on the
 // local network must be reached over the local network or not at all —
 // silently relaying through heimdall would send bytes off a network the
-// user believed they never left. PLAN.md §6.
+// user believed they never left. PLAN.md §5.
 func (t *Host) DialPeer(ctx context.Context, info peer.AddrInfo, p protocol.ID) (network.Stream, error) {
 	direct := directOnly(info.Addrs)
 	if len(direct) == 0 {
@@ -654,7 +658,7 @@ type Conn struct {
 
 // Describe reports how a connection actually reached its far end. It
 // reads the live connection rather than the intent that opened it,
-// because presence and path are different questions. PLAN.md §14.
+// because presence and path are different questions. PLAN.md §7.
 func Describe(c network.Conn) Conn {
 	addr := c.RemoteMultiaddr()
 	return Conn{

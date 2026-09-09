@@ -31,7 +31,7 @@ const version = "0.0.1"
 //	lanTimeout    how long a command waits for mDNS. Answers arrive in
 //	              milliseconds on a working network; this is giving up.
 //	lanHeadStart  how long --via auto waits for the LAN before trying
-//	              the relay. PLAN.md §6.
+//	              the relay. PLAN.md §5.
 //	dialTimeout   the whole attempt. A relayed dial has a reservation
 //	              and a hole punch to get through first.
 //	benchTimeout  a whole measurement, which moves real bytes.
@@ -145,7 +145,7 @@ environment (empty means the default):
 
 // showID prints the short fingerprint by default. The full peer id is
 // long and nobody reads it correctly; it belongs in diagnostics, which
-// is what --full is. SPEC.md §30.4.
+// is what --full is. SPEC.md §4.
 func showID(full bool) error {
 	id, err := identity.LoadOrCreate()
 	if err != nil {
@@ -193,9 +193,9 @@ func start() (*transport.Host, error) {
 	return transport.New(id.PrivateKey(), relays)
 }
 
-// run serves this machine. Until the File API lands it answers the echo
-// protocol only, which is enough to prove a peer reached us and over
-// which path.
+// run serves this machine. It answers the echo and benchmark protocols
+// only, which is enough to prove a peer reached us and over which path;
+// an application registers its own.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -332,7 +332,7 @@ func connect(want, path string) error {
 // open picks a path to the far end. LAN gets a head start because a
 // machine on this network should be reached on this network: nothing
 // leaves it, and it is faster. The relay is the fallback, never the
-// first choice. PLAN.md §6.
+// first choice. PLAN.md §5.
 func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path string, proto protocol.ID) (network.Stream, error) {
 	switch path {
 	case "lan", "relay", "auto":
@@ -368,9 +368,9 @@ func open(ctx context.Context, h *transport.Host, lan *discovery.LAN, want, path
 	return dialRelay(ctx, h, want, proto)
 }
 
-// dialRelay reaches a machine through heimdall. Discovering its address
-// is mimir's job, which does not exist yet, so the circuit address is
-// built from a configured relay plus a full peer id.
+// dialRelay reaches a machine through heimdall. Learning a peer's
+// address is the application's job, so here the circuit address is built
+// from a configured relay plus a full peer id.
 func dialRelay(ctx context.Context, h *transport.Host, want string, proto protocol.ID) (network.Stream, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -461,8 +461,8 @@ func bench(want, path string, mb int64) error {
 	// The pass above began on the relay, so its rate is an average of
 	// however many paths it used. The number that answers "is the relay
 	// the normal data path" is a whole transfer on the new one, which is
-	// also what the File API will do for the next request on a session
-	// that has been up a while.
+	// also what an application does for the next request on a session that
+	// has been up a while.
 	//
 	// There is only something to wait for if the transfer did not
 	// already find the better path itself.
@@ -499,8 +499,8 @@ func bench(want, path string, mb int64) error {
 // The check costs a look at the live connections, so a transfer that
 // never has anywhere better to go pays nothing and stays on one stream
 // from start to finish. The granularity is one check interval, and that
-// is less a limitation than a preview: the File API's ranged reads are
-// already one request per range, so this comes free once step 4 lands.
+// is less a limitation than a preview: an application that reads in
+// ranges is already one request per range, so it gets this for free.
 func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total int64) error {
 	start := time.Now()
 	path := transport.Describe(s.Conn()).Path

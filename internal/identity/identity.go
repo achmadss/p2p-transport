@@ -5,7 +5,7 @@
 // cannot succeed against a peer that does not hold the matching private
 // key. This is deliberately not a hardware fingerprint — those break
 // when a VM is cloned or a disk is swapped, and they leak facts about
-// the machine. PLAN.md §5.1.
+// the machine. PLAN.md §4.
 package identity
 
 import (
@@ -35,7 +35,7 @@ type Identity struct {
 // written anywhere but identity.key and never sent over any wire.
 func (i *Identity) PrivateKey() crypto.PrivKey { return i.priv }
 
-// ID is the full peer id. Diagnostics and protocol only — SPEC.md §30.4
+// ID is the full peer id. Diagnostics and protocol only — SPEC.md §4
 // keeps it out of ordinary user-facing output, where Fingerprint goes
 // instead.
 func (i *Identity) ID() peer.ID { return i.id }

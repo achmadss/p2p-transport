@@ -1,7 +1,8 @@
-# Ratatoskr — TODO
+# p2p-transport — TODO
 
 `SPEC.md` is the requirement. `PLAN.md` is the design. This file is the
-what, in order. The spec's MVP (§28) is complete at step 11.
+what, in order. Steps 0 to 3 built and proved the transport; steps 4
+to 9 turn it into something another repository can depend on.
 
 Rule: do not start a step until the one above passes its check.
 
@@ -36,7 +37,9 @@ the Noise handshake.
 - [x] Refuse to start if the key file is group or world readable
 - [x] Derive and cache the libp2p peer id
 - [x] Short display fingerprint for the UI; full id in diagnostics only
-- [x] `config.json`: shared folders with modes, trust list, device aliases
+- [x] `config.json`: relays, and — at the time — shared folders, a
+      trust list and device aliases. Those three are the application's
+      and leave in step 4
 - [x] `ratatoskr id`
 - [x] Tests: id stable across restarts; a corrupt key file fails loudly
 
@@ -45,8 +48,9 @@ permission check is skipped on Windows, whose Unix mode bits are
 synthetic — ACLs are a separate piece of work, not done here.
 
 `config.json`'s format and validation exist and are tested, but no
-command edits it yet; `trust`/`untrust`/`trusted` land with the
-authorisation work.
+command edits it yet, and the fields describing shares and trust are
+removed in step 4 rather than given one: authorisation is not decided
+in this repository.
 
 **Check:** `ratatoskr id` prints the same id twice, on all three machines.
 
@@ -56,8 +60,8 @@ authorisation work.
 
 - [x] libp2p mDNS discovery service, advertising the peer id
 - [x] `internal/discovery`: the mDNS implementation. No interface yet —
-      there is one implementation, and mimir lookup in step 10 is what
-      would justify putting something behind it
+      there is one implementation, and the caller supplying its own
+      addresses is what would justify putting something behind it
 - [x] `ratatoskr discover` lists agents on this network
 - [x] Dial a discovered peer by its LAN multiaddr, with no relay in the
       dial set, so nothing leaves the network
@@ -93,7 +97,7 @@ choice. Do it before anything depends on the answer.
       and MB/s on a 1 Gbps LAN and over the Internet
 - [x] Test: home Wi-Fi to phone hotspot — the peers meet and move bytes,
       over the relay. That is a working transfer and it counts as one:
-      `SPEC.md` §1 allows the relay to carry file data when no direct
+      `SPEC.md` §2 allows the relay to carry file data when no direct
       path can be opened, and the owner has said plainly that using it
       is not a failure.
 - [x] Test: home Wi-Fi to phone hotspot, *direct*. Passed 9 Sep 2026,
@@ -126,7 +130,7 @@ choice. Do it before anything depends on the answer.
       counters have not been read across a move. Nothing migrates a stream,
       in libp2p or in QUIC; checking `PathTo` every few MB and finishing
       the stream is the whole mechanism, and it is what ranged reads
-      give the File API for free. Built 9 Sep 2026, unmeasured.
+      the caller gets for nothing. Built 9 Sep 2026, unmeasured.
 - [x] Test: macOS↔Windows↔Linux; both peers behind the same NAT.
       Passed 9 Sep 2026, on the owner's runs.
 - [x] Serve over the relay immediately, upgrade in the background
@@ -159,11 +163,11 @@ wins without being sequenced.
 
 **Check:** two machines on different networks connect, and the numbers
 exist on paper. If throughput or punch rate is bad, stop and reconsider
-here rather than at step 9.
+here rather than after something is built on top of it.
 
 **Verdict: pass.** Machines on different networks connect, transfer,
 and verify their byte counts. The relay carries what cannot be punched,
-which `SPEC.md` §1 permits, and it is no longer the normal path: a
+which `SPEC.md` §2 permits, and it is no longer the normal path: a
 relayed pair on one LAN reached the LAN in ten seconds and ran at
 107.7 MB/s, a transfer already in flight moved itself across without
 being restarted, and the hotspot-to-home-line punch that this step
@@ -173,231 +177,127 @@ Two things the later steps still inherit. The hotspot number was never
 written down, so the punch rate on a renumbering carrier is known to be
 non-zero and not known to be anything more precise — re-measure before
 building on it. And a transfer can still spend its life on the relay
-when the punch does not land, so resume, progress and cancellation are
-load-bearing rather than polish, and step 11's metering is what stops
+when the punch does not land. That makes two things load-bearing:
+reporting the path honestly, so the caller above can decide what a
+relayed gigabyte is worth, and step 7's metering, which is what stops
 one such transfer from spending a month of VPS egress.
 
 ---
+## Step 4 — The seam
 
-## Step 4 — File API: read side
+Steps 0 to 3 proved the transport works. This one makes it usable from
+outside without dragging libp2p along, and it is the step that decides
+whether this repository is a library or a private detail of an
+application that does not exist yet.
 
-- [ ] `internal/protocol`: envelope, version, request and reply types
-- [ ] `internal/transport`: the `Transport` interface
-- [ ] `internal/transport/p2p`: streams over libp2p
-- [ ] `internal/transport/loopback`: in-process, so the file layer tests
-      with no network
-- [ ] `internal/fileapi`: the verbs. It must not import libp2p
-- [ ] `internal/fsroot`: clean, join, `EvalSymlinks`, verify inside root
-- [ ] `internal/fsroot`: the write variant — resolve the parent, then
-      check the final element has no separator
-- [ ] `internal/fsroot` tests: `..`, absolute paths, symlink escape, null
-      bytes, Windows reserved names, alternate data streams, `\\?\`
-      prefixes, trailing dots and spaces
-- [ ] `HELLO`, `PING`, `ROOTS`, `LIST` (paged), `STAT`, `DF`
-- [ ] Entry metadata: name, root-relative `path`, kind, size, modified,
-      optional `created` and `mode`, `symlink`
-- [ ] `path` is always what the client asked through, never a resolved
-      absolute path, which would leak the machine's layout
-- [ ] Trust list enforced: an unknown peer id is refused
-- [ ] `ERROR` codes; never leak a real path or a stack trace
-- [ ] Enforce the 64 KB control message cap
+- [ ] Promote `internal/transport` to `transport`, at the module root
+- [ ] `PeerID`, `Path` and `Stream` as this package's own types.
+      `Stream` is `io.ReadWriteCloser` plus `CloseWrite`, `Peer` and
+      `Path`; the libp2p stream satisfies it behind a thin wrapper
+- [ ] Protocol names are plain strings chosen by the caller
+- [ ] Addresses are opaque strings: out of `Addrs()`, into `Connect()`,
+      never parsed above. This is what keeps `multiaddr` out of layer 7
+- [ ] `New(Config)` replaces `New(key, relays)`; `Config` carries the
+      key, the relays and `NoLAN`
+- [ ] Retire `Dial`, `DialPeer`, `DialRelayed` and `Host()` from the
+      exported surface. Three dial verbs that differ by dial set are
+      one `Connect` plus policy, and `Host()` hands the caller the
+      entire library the seam exists to hide
+- [ ] `OnLAN` replaces reaching into `internal/discovery`
+- [ ] Strip `Shares`, `Trusted` and `Aliases` from `config.json`. They
+      are the application's, nothing in this repository reads them, and
+      leaving them is an invitation to implement authorisation here
+- [ ] One `example_test.go` that uses only the exported surface
+- [ ] Move the protocol identifiers this package registers for its own
+      business out of the exported names
 
-**Check:** a real directory listing crosses the wire. Every hostile path
-in the table is refused, over both transports.
-
----
-
-## Step 5 — Control API and CLI
-
-- [ ] `internal/control`: HTTP on `127.0.0.1`, random free port
-- [ ] Random token; `control.json` at 0600; bearer check on every route
-- [ ] `GET /v1/status`, `/v1/peers`, `/v1/discover`, `/v1/events`
-- [ ] `GET|POST|DELETE /v1/folders`, `/v1/trusted`
-- [ ] Device aliases, so `home:` resolves to a peer id
-- [ ] `ratatoskr ls home:/Documents`
-- [ ] Every subcommand becomes an HTTP client of the control API
-- [ ] Clear message when no agent is running
-- [ ] Verify the config dir on all three OSes
-
-**Check:** `ratatoskr ls home:/Documents` prints a real listing.
+**Check:** a package that imports `transport` and nothing else compiles,
+opens a stream, and reads a path — and `go list -deps` on that package
+shows no libp2p import that the caller wrote. Grep the exported
+signatures for the words in `SPEC.md` §4 and find none.
 
 ---
 
-## Step 6 — Download
+## Step 5 — Path changes are pushed, not polled
 
-- [ ] `READ` / `READ_OK` with size and BLAKE3 hash
-- [ ] `READ` with offset and length — needed for resume, seek and sniffing
-- [ ] `/ratatoskr/xfer/1.0.0`: header, then raw bytes to EOF
-- [ ] Backpressure is `io.CopyBuffer` with a 64 KB buffer. No credit
-      window — QUIC's stream flow control does the work
-- [ ] `CANCEL`, and closing the stream, both clean up on each side
-- [ ] Receiver verifies the whole-file hash before declaring success
-- [ ] Cap concurrent transfers per peer at 4
-- [ ] Handle a file that shrinks, grows or vanishes mid-transfer
-- [ ] `THUMB`: a 256 px preview rendered on the agent, pure-Go decoder
-- [ ] `HASH`: checksum a file without transferring it
-- [ ] `ratatoskr get home:/big.iso ./big.iso` with progress
-- [ ] Test: 10 GB, watching RSS on both sides
-- [ ] Test: 4 simultaneous transfers stay stable
+- [ ] `Watch(id) (<-chan Path, func())`, fired from the same connection
+      hooks `repair` already uses
+- [ ] A closed watch releases its goroutine and its channel
+- [ ] `ratatoskr bench` uses it instead of checking `PathTo` every four
+      megabytes, and the four-megabyte check is deleted
+- [ ] Document the recipe in one place: finish the stream in flight,
+      open the next one on the better path. Nothing migrates a stream
+- [ ] Report a dead stream clearly enough that a caller can tell "the
+      peer went away" from "the request was refused"
 
-**Check:** 10 GB completes, hash matches, memory flat on both sides.
+**Check:** a transfer moves to a better path within a second of that
+path landing, without polling, and the same run with `Watch` never
+called behaves exactly as before.
 
 ---
 
-## Step 7 — Write operations
+## Step 6 — Survival
 
-The first step that can destroy data. `PLAN.md` §11 is the spec.
+The ladder is built (`PLAN.md` §6). This is where it is proved against a
+real machine rather than a test.
 
-- [ ] `ro` roots refuse every write before any path work happens
-- [ ] A grant may narrow a root's mode, never widen it
-- [ ] `internal/fsops`: atomic write — temp file in the destination dir,
-      fsync file, fsync dir, rename over the target
-- [ ] Clean up stale temp files on startup
-- [ ] `WRITE` / `WRITE_OK`, including at an offset
-- [ ] Free-space check and size cap before an upload starts
-- [ ] `MKDIR` — no `-p` by default; refuse if the parent is missing
-- [ ] `MOVE` — validate source and destination separately; both `rw`; no
-      overwrite without the flag; cross-filesystem becomes copy, verify,
-      delete
-- [ ] `COPY` — server-side. Prove a 4 GB copy moves ~200 bytes
-- [ ] `DELETE` — files and directories; a non-empty directory needs
-      `recursive: true`; never follow a symlink out of a root; refuse to
-      delete a share root
-- [ ] `ratatoskr put | mkdir | mv | rm`
-- [ ] Destructive tests: kill mid-upload, disk full, permission denied,
-      target vanished, symlinked destination, traversal on every verb
+- [ ] Sleep and wake, on all three operating systems
+- [ ] Wi-Fi to Ethernet, and back, mid-transfer
+- [ ] Cable pulled and replaced
+- [ ] The relay restarted underneath a relayed pair
+- [ ] A peer that is simply gone: the descent gives up after 30 seconds
+      and says so, rather than retrying forever in silence
+- [ ] No goroutine leak after a thousand connect/disconnect cycles
+- [ ] No path is ever reported that the live connections do not support
 
-**Check:** every write verb works, and no half-written file survives a
-kill.
+**Check:** every one of the above reconnects or fails loudly. Nothing
+hangs, and `Close()` returns.
 
 ---
 
-## Step 8 — WebDAV gateway
+## Step 7 — heimdall in production
 
-- [ ] `internal/webdav` on `golang.org/x/net/webdav`, backed by the File API
-- [ ] Map PROPFIND, GET, PUT, MKCOL, MOVE, COPY, DELETE, HEAD, OPTIONS
-- [ ] `ratatoskr webdav --addr 127.0.0.1:9832`, one path prefix per device
-      (`http://127.0.0.1:9832/home-laptop/Documents/`)
-- [ ] Bind loopback only. A public WebDAV URL would put that server on the
-      data path
-- [ ] Ranged GET, so media players and resume work
-- [ ] Locking: null-lock only unless a client proves it needs more
-- [ ] Test with Finder, Windows Explorer, rclone and Cyberduck
-- [ ] Document the mount instructions for each
+- [ ] Deploy the 443 listener: new binary, `CAP_NET_BIND_SERVICE`, and
+      the 443 address added to `HEIMDALL_ANNOUNCE`, which replaces the
+      whole advertised set rather than adding to it
+- [ ] Reservation limits that survive a machine reconnecting in a loop
+- [ ] Per-peer data and duration limits, and what happens at the ceiling
+- [ ] Read the counters across a path change: a transfer that moves off
+      the relay part way through should stop costing egress
+- [ ] Restart without stranding reserved peers
 
-**Check:** Finder mounts it, browses, downloads and uploads.
-
----
-
-## Step 9 — Resume and recovery
-
-- [ ] `internal/transfer`: persisted records in `transfers/`
-- [ ] Download resume: re-`STAT`, compare size, mtime and hash, then
-      `READ` at the offset; discard rather than append to a stale partial
-- [ ] Upload resume: `STAT` the remote temp, `HASH` the prefix, compare,
-      then `WRITE` at the offset
-- [ ] Automatic retry with backoff on a dropped connection, no prompt
-- [ ] Surface a failure only after the retry budget is spent
-- [ ] Clean up stale `.rtpart` files on startup
-- [ ] `ratatoskr transfers [resume ID | cancel ID]`
-- [ ] Test: unplug the cable at 40% of a 10 GB transfer, replug, verify
-- [ ] Test: restart the process mid-transfer, verify
-- [ ] Test: change the source file mid-transfer, confirm it restarts
-      rather than corrupting
-
-**Check:** a 10 GB transfer survives an unplugged cable and the resulting
-file's hash is correct.
+**Check:** a 1 GB relayed transfer completes, is counted, and the
+counter stops rising the moment the pair moves off the relay.
 
 ---
 
-## Step 10 — mimir
+## Step 8 — Windows and Linux
 
-- [ ] `cmd/mimir`: HTTP service, database, sessions
-- [ ] Schema: accounts, devices, addresses, shares, grants
-- [ ] Mimir signing keypair; publish its public key
-- [ ] `internal/grant`: issue and verify, shared with the agent
-- [ ] Pairing: agent shows a short-lived single-use code; `POST /v1/pair`
-      redeems it; the agent pins mimir's public key
-- [ ] `PUT /v1/self/addrs` — the agent publishes its multiaddrs on change,
-      each tagged with its transport (quic|tcp|ws)
-- [ ] `GET /v1/devices`, `/v1/devices/{id}`, `/v1/devices/{id}/addrs`
-- [ ] `POST /v1/devices/{id}/grant`
-- [ ] Presence from agent heartbeats and heimdall reservations;
-      `unknown` when mimir cannot tell
-- [ ] Agent verifies grants: signature, device, expiry, account, and that
-      `client` equals the peer id libp2p already authenticated
-- [ ] Agent caches the last grant so LAN use survives a mimir outage
-- [ ] `network_hint` from comparing public IPs — a hint, never a fact
-- [ ] `ratatoskr pair CODE`, `ratatoskr devices`
-- [ ] Revocation: mimir stops issuing grants, drops addresses, heimdall
-      refuses the reservation — and the UI states honestly that an offline
-      agent takes effect within the grant lifetime
-- [ ] Keep grant lifetime at one hour, so the revocation window is small
-- [ ] Tests: expired grant, wrong device, forged signature, revoked device
+Everything above has been proved on macOS and, in places, on Windows.
 
-**Check:** `ratatoskr devices` lists a paired machine, and `ls` works
-against it from a different network.
+- [ ] Every check in steps 4 to 7, on Windows and Linux
+- [ ] Firewall prompts documented for each: which port, which prompt,
+      and whether allowing it once is enough
+- [ ] The unplugged-router test, still owed from step 2
+- [ ] `RATATOSKR_NO_MDNS=1` on a machine where multicast is refused
+- [ ] The `identity.key` permission gap on Windows: ACLs, or an honest
+      note that the check does not apply there
+
+**Check:** the same three-machine run passes from every one of the three
+as the initiator.
 
 ---
 
-## Step 11 — heimdall in production
+## Step 9 — Freeze and tag
 
-- [ ] Relay reservations with sensible limits per account
-- [ ] Rate limit and meter relayed bytes
-- [ ] Report relay use to mimir, so the bill can be predicted
-- [ ] TLS-terminated WebSocket transport for UDP-blocked networks
-- [ ] Confirm heimdall cannot decrypt anything it forwards, and record
-      what it unavoidably does learn: which peer ids talked, when, and how
-      many bytes
+- [ ] `README.md`: what this is, the surface, one worked example
+- [ ] `v1.0.0`, and the surface in `PLAN.md` §2.1 does not change after
+      it without a major version
+- [ ] `NAT.md`'s outstanding measurement taken: the hotspot punch, with
+      `RATATOSKR_DIAG=1`, numbers written down rather than a verdict
 
-**Check:** a 1 GB relayed transfer works, is counted, and is visibly
-slower than direct in the status UI.
-
----
-
-## Step 12 — Local web UI
-
-- [ ] Static page served by ratatoskr on `127.0.0.1`
-- [ ] Device list with presence and measured path
-- [ ] `web/src/fs-adapter.ts` — our verbs only; the only file the
-      file-manager library touches
-- [ ] Mount `@cubone/react-file-manager` on the adapter
-- [ ] Thumbnails from `THUMB`, never from a full download
-- [ ] Transfer list with progress, cancel and resume
-- [ ] Status wording: Online / Local network / Direct / Relayed / Offline.
-      No QUIC, DCUtR, multiaddr or circuit anywhere in the UI
-
-**Check:** browse, download and upload from a browser on `127.0.0.1`.
-
----
-
-## Step 13 — Survival
-
-- [ ] Sleep and wake the agent machine
-- [ ] Switch Wi-Fi to hotspot mid-connection
-- [ ] Move between LAN and Internet; discovery re-picks the right path
-- [ ] Restart the agent; addresses republish; peers reconnect
-- [ ] Restart heimdall; reservations are retaken
-- [ ] mimir down: existing grants still work on the LAN; the UI says so
-- [ ] Kill the client mid-transfer; the agent frees the file handle
-- [ ] Every failure path ends in a working connection or an honest error.
-      Never a hang.
-
-**Check:** the whole list, on all three machines.
-
----
-
-## Step 14 — Mobile app
-
-- [ ] Embed the client library
-- [ ] Identity in Keychain / Keystore
-- [ ] mDNS: iOS local network permission and multicast entitlement;
-      Android NSD
-- [ ] File manager UI, built rather than adopted
-- [ ] Background transfer behaviour on both platforms
-
-**Check:** browse and transfer over the LAN with the phone offline apart
-from Wi-Fi.
+**Check:** an application in another repository depends on the tag,
+connects two machines, and its author never reads `PLAN.md` §3.
 
 ---
 
@@ -408,13 +308,16 @@ from Wi-Fi.
 - [ ] `CGO_ENABLED=0` enforced in CI
 - [ ] `go vet` and `staticcheck` clean
 - [ ] Pin libp2p versions; review before every bump
-- [ ] Structured logging; `--verbose` for dial, discovery and hole-punch detail
-- [ ] Unit tests beside each package. `identity`, `fsroot`, `protocol`,
-      `grant` and `transfer` must be thorough
-- [ ] `README.md` once step 8 passes
+- [ ] Unit tests beside each package
+- [ ] Every measured number goes in `NAT.md` with its date and the
+      machines it was taken on. A verdict is not a measurement
 
-## Deliberately not now
+## Not this repository
 
-Zero-install browser access · SFTP, FUSE and SMB adapters · search across
-devices · version history · sync · sharing between accounts · public
-links · tray launcher · installers and autostart
+Files, folders and metadata · a file protocol · WebDAV, SFTP, FUSE and
+SMB · accounts, device registries and presence · authorisation policy ·
+resume state and integrity hashes · any user interface.
+
+`SPEC.md` §11 is the same list. They are the application's, and the
+whole point of steps 4 and 9 is that the application can be written
+against a frozen surface without any of it leaking down here.

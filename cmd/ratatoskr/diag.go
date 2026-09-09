@@ -20,7 +20,7 @@ import (
 // "no hole punch" with nothing behind it, and the three separate
 // things that must all succeed cannot be told apart.
 //
-// SPEC.md §30.4 keeps this language out of ordinary output, which is
+// SPEC.md §4 keeps this language out of ordinary output, which is
 // why it is behind RATATOSKR_DIAG rather than always on.
 func diagnose(ctx context.Context, h *transport.Host) {
 	if config.Str("RATATOSKR_DIAG", "") == "" {

@@ -1,6 +1,5 @@
-// Package config owns where Ratatoskr keeps its state on each operating
-// system, and the one file that describes what this machine shares and
-// who it trusts.
+// Package config owns where this machine keeps its state on each
+// operating system, and the one file that names the relays it may use.
 //
 // Nothing here imports libp2p. The config is a plain description of
 // intent; turning a peer id string into a live connection is the
@@ -81,8 +80,9 @@ type Share struct {
 	Mode Mode   `json:"mode"`
 }
 
-// A Peer is a peer id this machine will serve without a mimir grant.
-// This is the local, serverless authorisation path of PLAN.md §5.2.
+// A Peer is a peer id an application above chose to trust.
+// Nothing in this repository reads these: authorisation is the
+// application's, not layer 4's, and step 4 of TODO.md removes them.
 type Peer struct {
 	ID    string    `json:"id"`
 	Name  string    `json:"name,omitempty"`

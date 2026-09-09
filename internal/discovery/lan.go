@@ -1,10 +1,11 @@
 // Package discovery finds other Ratatoskr machines.
 //
-// This is the LAN half: mDNS, no server, no Internet. PLAN.md §6 gives
-// it a 400 ms head start over mimir, because a peer found here is dialled
-// over the local network and nothing leaves it. The mimir half arrives
-// with the coordinator; there is no Discovery interface until there is a
-// second implementation to put behind it.
+// This is the only discovery layer 4 does: mDNS, no server, no
+// Internet. PLAN.md §5 gives it a 400 ms head start over whatever
+// addresses the application supplies, because a peer found here is
+// dialled over the local network and nothing leaves it. There is no
+// Discovery interface, because addresses from anywhere else arrive as
+// opaque strings rather than as another implementation.
 package discovery
 
 import (

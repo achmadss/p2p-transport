@@ -3,7 +3,7 @@
 // It forwards a Noise session it holds no key for, so it cannot tell a
 // directory listing from a photograph. What it does unavoidably learn is
 // which peer ids talked, when, and how many bytes — true of any relay,
-// and stated rather than implied. PLAN.md §4.4.
+// and stated rather than implied. PLAN.md §3.4.
 package main
 
 import (
@@ -118,8 +118,8 @@ func run() error {
 	// is a whole video, so the limit is raised to something a person
 	// would actually hit.
 	//
-	// ponytail: one limit for everyone. Per-account limits and metering
-	// are step 11, and need mimir to have accounts to meter.
+	// ponytail: one limit for everyone. Per-peer limits and metering are
+	// step 7, and need an application above with accounts to meter.
 	res := relay.DefaultResources()
 	res.Limit = &relay.RelayLimit{
 		Duration: config.Duration("HEIMDALL_CIRCUIT_DURATION", defaultDuration),
