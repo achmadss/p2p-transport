@@ -630,6 +630,27 @@ func (t *Host) PathTo(id peer.ID) Path {
 
 func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 
+// BetterThan ranks two measured paths against step 3's ladder: the LAN
+// if the peer is here, the Internet if it is not, the relay only when
+// neither can be opened, and unknown below all three.
+//
+// It exists so that a transfer already running can ask whether moving
+// is worth a new stream. PathTo has the same order built into it, and
+// this is where the order is written down.
+func (p Path) BetterThan(other Path) bool { return rank(p) < rank(other) }
+
+func rank(p Path) int {
+	switch p {
+	case PathLAN:
+		return 0
+	case PathDirect:
+		return 1
+	case PathRelay:
+		return 2
+	}
+	return 3
+}
+
 func (t *Host) Close() error {
 	t.closeOnce.Do(func() { close(t.done) })
 	return t.h.Close()

@@ -876,11 +876,17 @@ addresses, client-initiated only (`quic-go/connection.go:1261`, and
 remote endpoints with two handshakes and two Noise sessions. There is
 no path to migrate along.
 
-So the transfer moves and the connection does not. `bench --chunk N`
-sends N MB at a time, each chunk on a stream of its own; every new
-stream is handed whatever connection `bestConnToPeer` likes best at
-that moment, so the bytes still unsent take the new path as soon as one
-exists. It prints where the change happened:
+So the transfer moves and the connection does not, and it does it
+without being asked. Every four megabytes `transfer` looks up from
+sending and asks `PathTo` what the best path to this peer is now. When
+that beats the path the current stream is on — `Path.BetterThan`, which
+is where the ladder LAN, Internet, relay is finally written down — it
+finishes that stream, opens a new one, and sends the rest down it;
+`bestConnToPeer` hands the new stream the better connection. The check
+reads live connections and costs nothing, so a transfer with nowhere
+better to go stays on one stream from beginning to end and never pays
+for the ability. `--chunk` moves the interval for a test that wants the
+change to land somewhere in particular.
 
 ```
 connected to VqfZ-X78a over relay
@@ -891,11 +897,11 @@ moved from relay to lan after 24 MB
 The rate over a run that moved is an average of both paths and not
 either of them; the number worth reading is the move line.
 
-Granularity is one chunk, and that is not a limitation of this design
-so much as a preview of the real one: the File API's ranged reads are
-already one request per range, so a transfer that survives a path
-change is what steps 4 and 5 get without asking. What this adds is the
-measurement, now, on the diagnostic that already exists.
+Granularity is one interval, and that is not a limitation of this
+design so much as a preview of the real one: the File API's ranged
+reads are already one request per range, so a transfer that survives a
+path change is what steps 4 and 5 get without asking. What this adds is
+the measurement, now, on the diagnostic that already exists.
 
 One thing it changed underneath: `RATATOSKR_RELAY_CAP` used to be an
 allowance per stream, which for a chunked transfer would have been an

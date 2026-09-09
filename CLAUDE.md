@@ -263,11 +263,14 @@ LAN address by libp2p. `askAddrs` asks the peer directly each tick.
 A stream, though, never moves: it is bound to the connection it was
 opened on, and neither libp2p nor QUIC offers a migration that would
 change that (QUIC's moves one connection between *local* addresses; the
-relay and the peer are two remote endpoints). So a transfer that must
-survive the upgrade is sent in chunks, one stream each — `bench
---chunk N` measures it, and the File API's ranged reads will get it for
-free. `RATATOSKR_RELAY_CAP` is therefore an allowance per relayed
-connection, not per stream.
+relay and the peer are two remote endpoints). So a running transfer
+checks `PathTo` every four megabytes and, when the answer beats the
+path its stream is on, finishes that stream and sends the rest on a new
+one — `Path.BetterThan` holds the order. The check is free, so a
+transfer with nowhere better to go never leaves its first stream. The
+File API's ranged reads get the same behaviour for nothing.
+`RATATOSKR_RELAY_CAP` is therefore an allowance per relayed connection,
+not per stream.
 
 **Presence and path are different questions.** Presence comes from mimir
 before connecting (`online`/`offline`/`unknown`). The path (`lan`/

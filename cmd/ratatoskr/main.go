@@ -93,7 +93,7 @@ func main() {
 			err = fmt.Errorf("bench needs a machine id")
 			break
 		}
-		err = bench(args[0], via(args[1:]), size(args[1:]), chunkOf(args[1:]))
+		err = bench(args[0], via(args[1:]), size(args[1:]), checkEvery(args[1:]))
 	case "connect":
 		if len(args) == 0 {
 			err = fmt.Errorf("connect needs a machine id or fingerprint")
@@ -121,9 +121,9 @@ func usage() {
                        connect to a machine by id or fingerprint
   bench ID [--via ...] [--mb N] [--chunk N]
                        measure throughput to a machine, default 100 MB.
-                       --chunk sends it N MB at a time, each chunk on a
-                       new stream, so a transfer already running moves
-                       onto a better path as soon as one opens
+                       A transfer moves onto a better path by itself
+                       when one opens while it is running; --chunk sets
+                       how often it looks, in MB, default 4
   natcheck             classify this network's NAT, which decides
                        whether a direct connection is possible at all
   punch-quic listen|dial
@@ -426,10 +426,19 @@ func size(args []string) int64 {
 	return int64(config.Int("RATATOSKR_BENCH_MB", 100))
 }
 
-// chunkOf reads --chunk, in MB. Zero, the default, sends the whole
-// transfer on a single stream, which is what one ranged read will look
-// like when the File API lands.
-func chunkOf(args []string) int64 {
+// moveCheck is how often a running transfer looks up from sending to
+// ask whether a better path has opened.
+//
+// The check itself is free — it reads the live connections — so this is
+// only the granularity of the move, and it is small on purpose. Four
+// megabytes is a fifth of a second on a LAN and twenty seconds on the
+// worst relay measured, which is the right way round: the slower the
+// path being escaped, the more there is left to move.
+const moveCheck = 4 << 20
+
+// checkEvery reads --chunk, in MB, which overrides that for a test that
+// wants the move to land somewhere in particular.
+func checkEvery(args []string) int64 {
 	for i, a := range args {
 		if a == "--chunk" && i+1 < len(args) {
 			if n, err := strconv.ParseInt(args[i+1], 10, 64); err == nil && n > 0 {
@@ -437,13 +446,13 @@ func chunkOf(args []string) int64 {
 			}
 		}
 	}
-	return 0
+	return moveCheck
 }
 
 // bench measures a path and watches for a hole punch. These are the
 // numbers TODO step 3 exists to produce: throughput, and whether a
 // relayed connection becomes a direct one and how long that took.
-func bench(want, path string, mb, chunk int64) error {
+func bench(want, path string, mb, check int64) error {
 	h, err := start()
 	if err != nil {
 		return err
@@ -478,7 +487,7 @@ func bench(want, path string, mb, chunk int64) error {
 			mb, human(relayCap))
 	}
 
-	if err := transfer(ctx, h, s, peerID, mb, total, chunk); err != nil {
+	if err := transfer(ctx, h, s, peerID, mb, total, check); err != nil {
 		return err
 	}
 	if first != transport.PathRelay {
@@ -502,59 +511,73 @@ func bench(want, path string, mb, chunk int64) error {
 	defer s2.Close()
 	again := transport.Describe(s2.Conn()).Path
 	fmt.Printf("second pass over %s\n", again)
-	return transfer(ctx, h, s2, peerID, mb, total, chunk)
+	return transfer(ctx, h, s2, peerID, mb, total, check)
 }
 
-// transfer sends the bytes and reports the rate the far end confirms.
+// transfer sends the bytes and reports the rate the far end confirms,
+// moving onto a better path if one opens while it is still sending.
 //
-// With --chunk it sends them a chunk at a time, each chunk on a stream
-// of its own, and that is the only way a transfer already in flight
-// changes path. Nothing migrates. A libp2p stream is bound to the
-// connection it was opened on, and QUIC's own migration moves one
-// connection between local addresses rather than between two
-// connections to two different remote endpoints — the relay and the
-// peer are two endpoints with two handshakes, so there is nothing there
-// to migrate along. What moves instead is the transfer: every new
-// stream is handed the best connection there is at that moment, and the
-// bytes not yet sent go the new way. The granularity is one chunk,
-// which is what the File API will get for free from ranged reads.
-func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total, chunk int64) error {
+// Nothing migrates. A libp2p stream is bound to the connection it was
+// opened on, and QUIC's own migration moves one connection between
+// local addresses rather than between two connections to two different
+// remote endpoints — the relay and the peer are two endpoints with two
+// handshakes, so there is nothing there to migrate along. What moves is
+// the transfer: every `moveCheck` bytes it asks what the best path to
+// the peer is now, and when that beats the path it is on it finishes
+// the stream it has, opens a new one — which the muxer hands the better
+// connection — and sends the rest there.
+//
+// The check costs a look at the live connections, so a transfer that
+// never has anywhere better to go pays nothing and stays on one stream
+// from start to finish. The granularity is one check interval, and that
+// is less a limitation than a preview: the File API's ranged reads are
+// already one request per range, so this comes free once step 4 lands.
+func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total, check int64) error {
 	start := time.Now()
 	path := transport.Describe(s.Conn()).Path
 	moved := 0
+	sentOnStream := int64(0)
 
 	for sent := int64(0); sent < total; {
 		n := total - sent
-		if chunk > 0 && chunk < n {
-			n = chunk
+		if check > 0 && check < n {
+			n = check
 		}
-		got, err := sendChunk(s, n)
-		s.Close()
-		if err != nil {
-			return err
-		}
-		if got != n {
-			return fmt.Errorf("sent %d bytes, far end received %d", n, got)
+		if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, n); err != nil {
+			return fmt.Errorf("send: %w", err)
 		}
 		sent += n
+		sentOnStream += n
 		if sent == total {
 			break
 		}
 
-		if s, err = h.Open(ctx, id, transport.BenchProto); err != nil {
-			return fmt.Errorf("chunk at %s: %w", human(sent), err)
+		best := h.PathTo(id)
+		if !best.BetterThan(path) {
+			continue
 		}
-		if p := transport.Describe(s.Conn()).Path; p != path {
-			fmt.Printf("moved from %s to %s after %s\n", path, p, human(sent))
-			path, moved = p, moved+1
+		if err := confirm(s, sentOnStream); err != nil {
+			return err
 		}
+		next, err := h.Open(ctx, id, transport.BenchProto)
+		if err != nil {
+			// The path improved and the new stream would not open. The
+			// old connection is finished, so there is nothing left to
+			// fall back to and saying so beats a silent stall.
+			return fmt.Errorf("moving from %s to %s after %s: %w", path, best, human(sent), err)
+		}
+		s, sentOnStream = next, 0
+		fmt.Printf("moved from %s to %s after %s\n", path, transport.Describe(s.Conn()).Path, human(sent))
+		path, moved = transport.Describe(s.Conn()).Path, moved+1
+	}
+	if err := confirm(s, sentOnStream); err != nil {
+		return err
 	}
 	elapsed := time.Since(start)
 
-	// The rate is over the whole transfer, so a run that moved part way
-	// through reports an average of both paths and not either of them.
-	// The number to read there is the one the move line gives: where it
-	// happened, and how much was still to send.
+	// A run that moved reports an average of the paths it used and not
+	// any one of them. The number worth reading there is the move line:
+	// where the change happened, and how much was still to send.
 	where := string(path)
 	if moved > 0 {
 		where = fmt.Sprintf("%s, after %d move(s)", path, moved)
@@ -564,25 +587,26 @@ func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.
 	return nil
 }
 
-// sendChunk writes one chunk and returns the byte count the far end
-// confirms. The far end counts to end of stream, so each chunk is
-// half-closed and acknowledged before the next one opens.
-func sendChunk(s network.Stream, n int64) (int64, error) {
-	if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, n); err != nil {
-		return 0, fmt.Errorf("send: %w", err)
-	}
+// confirm half-closes a stream and checks the far end counted every
+// byte that went down it. The far end counts to end of stream, so this
+// is also what ends one.
+func confirm(s network.Stream, want int64) error {
+	defer s.Close()
 	if err := s.CloseWrite(); err != nil {
-		return 0, fmt.Errorf("half close: %w", err)
+		return fmt.Errorf("half close: %w", err)
 	}
 	reply, err := bufio.NewReader(s).ReadString('\n')
 	if err != nil {
-		return 0, fmt.Errorf("read: %w", err)
+		return fmt.Errorf("read: %w", err)
 	}
 	got, err := strconv.ParseInt(strings.TrimSpace(reply), 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("far end reported %q, not a byte count", strings.TrimSpace(reply))
+		return fmt.Errorf("far end reported %q, not a byte count", strings.TrimSpace(reply))
 	}
-	return got, nil
+	if got != want {
+		return fmt.Errorf("sent %d bytes, far end received %d", want, got)
+	}
+	return nil
 }
 
 // watchUpgrade waits to see whether the relayed connection becomes a

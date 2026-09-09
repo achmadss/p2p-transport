@@ -119,12 +119,12 @@ choice. Do it before anything depends on the answer.
       other's LAN address. Run it with mDNS off — discovery and path
       are different questions, and mDNS answers the first one only.
       Built 9 Sep 2026, unmeasured.
-- [ ] Test: `bench --chunk` moves a transfer already running from the
-      relay onto the direct path at a chunk boundary, and heimdall's
-      counters stop climbing there. Nothing migrates a stream, in
-      libp2p or in QUIC; a new stream per chunk is the whole mechanism,
-      and it is what ranged reads give the File API for free.
-      Built 9 Sep 2026, unmeasured.
+- [ ] Test: a transfer already running moves itself off the relay when
+      the punch lands part way through it, and heimdall's counters stop
+      climbing there rather than at the end. Nothing migrates a stream,
+      in libp2p or in QUIC; checking `PathTo` every few MB and finishing
+      the stream is the whole mechanism, and it is what ranged reads
+      give the File API for free. Built 9 Sep 2026, unmeasured.
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is

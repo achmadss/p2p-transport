@@ -120,3 +120,20 @@ func TestAskAddrsCarriesWhatIdentifyDrops(t *testing.T) {
 		}
 	}
 }
+
+// TestPathLadder pins the order a running transfer moves along. Getting
+// it wrong is silent: a transfer would either refuse to leave the relay
+// or leave the LAN for the Internet, and both still deliver the bytes.
+func TestPathLadder(t *testing.T) {
+	ladder := []Path{PathLAN, PathDirect, PathRelay, PathUnknown}
+	for i, better := range ladder {
+		for _, worse := range ladder[i+1:] {
+			if !better.BetterThan(worse) || worse.BetterThan(better) {
+				t.Fatalf("%s and %s are the wrong way round", better, worse)
+			}
+		}
+		if better.BetterThan(better) {
+			t.Fatalf("%s is better than itself", better)
+		}
+	}
+}
