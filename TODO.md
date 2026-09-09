@@ -90,14 +90,18 @@ stream and reads a path, with no libp2p import the caller wrote.
 shapes.
 
 - [ ] `bifrost`: relay registry, placement, leases, quota push, metering
-- [ ] Vendored relay hop with a per-subject shaper and per-subject bytes
+- [ ] Vendored relay hop: one bucket per subject, no per-circuit limiter
+- [ ] The allowance loop: demand reported per second, max-min allocated
+      across the relays carrying a subject, pushed back
 - [ ] Agents lease a relay instead of reading one from `config.json`,
       and re-lease without a deadline when a relay dies
-- [ ] Autoscale within `min`/`max`, drain before destroy
+- [ ] Autoscale within `min`/`max`; pack tight, shed the idle first,
+      drain the emptiest relay before destroying it
 
 **Check:** a relay is killed mid-transfer and the pair is back on
-another one; an account's share divides across its active machines and
-follows a limit changed while it runs.
+another one; two machines on one subject behind a fast and a slow link
+measure 9 and 1 rather than 5 and 1, on the same relay or on two; a
+limit changed mid-transfer takes effect mid-transfer.
 
 ## Step 8 — Windows and Linux
 

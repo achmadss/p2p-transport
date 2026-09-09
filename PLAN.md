@@ -400,7 +400,8 @@ than an address it cannot promise.
 **One relay named in a file is the development shape, not the deployed
 one.** `FLEET.md` is the design that replaces it: many relays with
 ephemeral addresses, a coordinator called `bifrost` that places and
-meters them, bandwidth divided per subject rather than per machine, and
+meters them, bandwidth divided per subject by demand rather than per
+machine by a divisor, and
 a VPS count that follows committed demand. It changes nothing in §2.1 —
 the application above still hands the transport opaque strings and never
 learns what a relay is.
@@ -466,7 +467,7 @@ other.
 | 4 | **The seam**: the surface of §2.1, public | a consumer package compiles against it without importing libp2p |
 | 5 | Path changes are pushed, not polled | a transfer moves to a better path without asking every four megabytes |
 | 6 | Survival | sleep, wake, network change, cable pull, restart — reconnects, never hangs, leaks no goroutines |
-| 7 | **The relay fleet** (`FLEET.md`) | a relay is killed mid-transfer and the pair lands on another; a subject's share divides across its active machines and follows a limit changed while it runs |
+| 7 | **The relay fleet** (`FLEET.md`) | a relay is killed mid-transfer and the pair lands on another; a subject's rate divides by demand across its machines wherever they are placed, and follows a limit changed while it runs |
 | 8 | Windows and Linux | every check above passes on all three, firewall prompts documented |
 | 9 | Freeze and tag | v1.0.0, a README for the consumer, one worked example |
 

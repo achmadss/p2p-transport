@@ -111,12 +111,18 @@ remains the fallback and carrying real data over it is not a failure:
 **Step 7 is designed and not built.** `FLEET.md` replaces the single
 relay named in `config.json` with a fleet: ephemeral relays, a
 coordinator that places and meters them, bandwidth divided per *subject*
-across that subject's actively transferring machines, and autoscaling
-between a minimum and a maximum VPS count. Two things in it are easy to
-get wrong and are written down for that reason — a subject's machines
-must all land on the same relay or nothing can enforce its aggregate,
-and go-libp2p's relay has no per-connection rate hook, so the shaper
-needs a vendored copy of the hop.
+by demand, and autoscaling between a minimum and a maximum VPS count.
+
+Three things in it are easy to get wrong and are written down for that
+reason. **Demand does the dividing, not a divisor**: one shared bucket
+per subject, no per-circuit limiter, so a machine on a slow link takes
+what it can and leaves the rest — an equal split wastes whatever the
+slow machines cannot use. A subject's circuits **spread across relays**,
+so its rate is re-divided between them every second by max-min
+allocation; an earlier draft pinned a subject to one relay and that was
+wrong twice over. And go-libp2p's relay has **no per-connection rate
+hook** — `WithLimit` is a byte cap and `BytesTransferred` carries no
+peer id — so the shaper needs a vendored copy of the hop.
 
 **Step 4 is next, and it is the seam.** `internal/transport` becomes
 `transport`; `PeerID`, `Path` and `Stream` become this package's own
