@@ -75,30 +75,24 @@ LAN and relay are measured: 65 MB/s over Wi-Fi, 3.7 MB/s relayed.
 **What is not solved is a *direct* path from a phone on a public network
 to a laptop at home, and that is the ordinary case rather than an edge
 one.** The carrier tested gives every new destination an unrelated port,
-so no address a third party observes names the door a peer must dial. A
-punch lands in 251 ms when the agent is seconds old and never once it is
-minutes old; a measured address, a span of five and a span of sixty-six
-have all failed. The relay carries this case meanwhile and carries it
-properly: `SPEC.md` §1 allows the fallback, the owner has confirmed
-that using it is not a failure, and a transfer that goes over heimdall
-is a transfer that happened. What is wrong is only that on this carrier
-the fallback would be the *normal* path, which §6 forbids — so the punch
-is an upgrade worth going on working at, not a precondition for the
-product. `TODO.md` step 3 carries the numbers and the plan. Tailscale's
-`net/portmapper`, `net/netcheck`, `wgengine/magicsock` and `disco` have
-now been read, the decision was written down there, and both halves of
-it are built: `selfAddr.Addrs` publishes a *set* of independently
-measured addresses refreshed every 27 seconds instead of the one stale
-address DCUtR was given all along, and `internal/transport/upgrade.go`
-re-dials a relayed peer every five seconds for as long as it stays
-relayed, rather than giving up after DCUtR's three attempts. Whether
-that lands on the hotspot is unmeasured, and it is the only test that
-has ever been able to fail. Port mapping is closed on both ends and the
-birthday attack is not in Tailscale's source at all. It is cloned at
-`/Users/achmad/Documents/Belajar/tailscale` — a sibling to read, not a
-dependency; nothing here imports it and `CGO_ENABLED=0` and the
-package layout in `PLAN.md` §17 still bind. Read `derp` to understand
-the fallback they chose and do not adopt it.
+so no address a third party observes names the door a peer must dial,
+and every aim tried so far has missed. The relay carries this case
+meanwhile and carries it properly: `SPEC.md` §1 allows the fallback,
+the owner has confirmed that using it is not a failure, and a transfer
+that goes over heimdall is a transfer that happened. What is wrong is
+only that on this carrier the fallback would be the *normal* path,
+which §6 forbids — so the punch is an upgrade worth going on working
+at, not a precondition for the product. The numbers, the three readings
+that turned out to be wrong, and the Tailscale reading that decided the
+design are all in `NAT.md`; `TODO.md` step 3 has the work list. What
+came out of it is built and unmeasured: a *set* of addresses re-measured
+every 27 seconds, and a punch retried every five seconds for as long as
+a peer stays relayed rather than DCUtR's three attempts.
+
+Tailscale is cloned at `/Users/achmad/Documents/Belajar/tailscale` — a
+sibling to read, not a dependency; nothing here imports it and
+`CGO_ENABLED=0` and the package layout in `PLAN.md` §17 still bind.
+Read `derp` to understand the fallback they chose and do not adopt it.
 
 Four traps this step exposed. libp2p marks a relayed connection
 *limited* and refuses streams on it unless the dial passes
@@ -269,8 +263,6 @@ path its stream is on, finishes that stream and sends the rest on a new
 one — `Path.BetterThan` holds the order. The check is free, so a
 transfer with nowhere better to go never leaves its first stream. The
 File API's ranged reads get the same behaviour for nothing.
-`RATATOSKR_RELAY_CAP` is therefore an allowance per relayed connection,
-not per stream.
 
 **Presence and path are different questions.** Presence comes from mimir
 before connecting (`online`/`offline`/`unknown`). The path (`lan`/

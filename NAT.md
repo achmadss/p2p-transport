@@ -304,8 +304,9 @@ port the carrier uses toward anyone else, but it is one below it. A
 bare punch spread over nine ports above the published one crossed
 immediately — 77 packets in, 74 out, and QUIC handshaked and carried a
 stream both ways. The packets came back from `9315`, exactly the port
-the reflector had named, and `RATATOSKR_PUNCH_SPREAD` prints that
-offset rather than assuming it.
+the reflector had named. (The spread was a knob for a while; the
+paragraphs below retract the finding, and it was removed with the rest
+of the idea on 9 Sep 2026.)
 
 What advances the port is time, not the destination. `natcheck` asks
 four observers inside a second and all four agree; the punch asks the
@@ -421,10 +422,9 @@ either. Four had already missed. So they are not sequential inside any
 span worth advertising, and a span is not a fix: it would cost every
 peer sixty-five dials that cannot arrive.
 
-`nextDoors` is therefore zero, measured rather than chosen. What
-remains is one freshly measured address instead of one stale one, which
-is right wherever the published address is merely old and does not help
-here.
+So the span went, and `quicAddr` offers the one address it measured.
+What remains is a fresh address instead of a stale one, which is right
+wherever the published address is merely old and does not help here.
 
 What is left for this network is not code. Two peers with real IPv6
 have no mail room between them at all, and the hotspot already has a
@@ -885,8 +885,7 @@ finishes that stream, opens a new one, and sends the rest down it;
 `bestConnToPeer` hands the new stream the better connection. The check
 reads live connections and costs nothing, so a transfer with nowhere
 better to go stays on one stream from beginning to end and never pays
-for the ability. `--chunk` moves the interval for a test that wants the
-change to land somewhere in particular.
+for the ability.
 
 ```
 connected to VqfZ-X78a over relay
@@ -903,8 +902,3 @@ reads are already one request per range, so a transfer that survives a
 path change is what steps 4 and 5 get without asking. What this adds is
 the measurement, now, on the diagnostic that already exists.
 
-One thing it changed underneath: `RATATOSKR_RELAY_CAP` used to be an
-allowance per stream, which for a chunked transfer would have been an
-allowance per chunk — the cap spent over again ten times. It is now one
-allowance per relayed connection, held in a small map both ends read
-through `guard`.

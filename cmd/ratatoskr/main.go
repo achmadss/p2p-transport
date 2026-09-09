@@ -11,8 +11,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -51,16 +49,6 @@ var (
 	dialTimeout  = config.Duration("RATATOSKR_DIAL_TIMEOUT", 30*time.Second)
 	benchTimeout = config.Duration("RATATOSKR_BENCH_TIMEOUT", 10*time.Minute)
 	punchWindow  = config.Duration("RATATOSKR_PUNCH_WINDOW", 90*time.Second)
-
-	// A relayed byte crosses the relay's host twice, in and out, and
-	// TODO.md step 3 measured a network where no direct path is ever
-	// reachable: against a symmetric carrier NAT the relay is not a
-	// fallback, it is the only route. A transfer there can spend a
-	// month of someone's egress without ever looking wrong. The cap
-	// bounds one transfer; zero, the default, means no cap, because
-	// refusing a transfer the user asked for is worse than the bill
-	// until they have said which bill they mind.
-	relayCap = config.Bytes("RATATOSKR_RELAY_CAP", 0)
 )
 
 func main() {
@@ -93,7 +81,7 @@ func main() {
 			err = fmt.Errorf("bench needs a machine id")
 			break
 		}
-		err = bench(args[0], via(args[1:]), size(args[1:]), checkEvery(args[1:]))
+		err = bench(args[0], via(args[1:]), size(args[1:]))
 	case "connect":
 		if len(args) == 0 {
 			err = fmt.Errorf("connect needs a machine id or fingerprint")
@@ -119,11 +107,10 @@ func usage() {
   discover [--full]    list Ratatoskr machines on this network
   connect ID [--via lan|relay|auto]
                        connect to a machine by id or fingerprint
-  bench ID [--via ...] [--mb N] [--chunk N]
+  bench ID [--via ...] [--mb N]
                        measure throughput to a machine, default 100 MB.
                        A transfer moves onto a better path by itself
-                       when one opens while it is running; --chunk sets
-                       how often it looks, in MB, default 4
+                       when one opens while it is running
   natcheck             classify this network's NAT, which decides
                        whether a direct connection is possible at all
   punch-quic listen|dial
@@ -144,8 +131,6 @@ environment (empty means the default):
   RATATOSKR_UPGRADE_EVERY   retry the punch on a relayed peer      (5s)
   RATATOSKR_UPGRADE_DIAL    how long one retry may take            (5s)
   RATATOSKR_BENCH_MB        default benchmark size               (100)
-  RATATOSKR_RELAY_CAP       bytes one relayed connection may move,
-                            K/M/G suffixes. 0 means no cap.        (0)
   RATATOSKR_ASSUME_PUBLIC   skip the relay reservation on a machine
                             that is genuinely reachable from outside
   RATATOSKR_STUN            natcheck reflectors, comma separated.
@@ -228,7 +213,7 @@ func run() error {
 
 	h.Handle(transport.BenchProto, func(s network.Stream) {
 		defer s.Close()
-		n, err := io.Copy(guard(s.Conn(), io.Discard), s)
+		n, err := io.Copy(io.Discard, s)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "bench:", err)
 			return
@@ -436,23 +421,10 @@ func size(args []string) int64 {
 // path being escaped, the more there is left to move.
 const moveCheck = 4 << 20
 
-// checkEvery reads --chunk, in MB, which overrides that for a test that
-// wants the move to land somewhere in particular.
-func checkEvery(args []string) int64 {
-	for i, a := range args {
-		if a == "--chunk" && i+1 < len(args) {
-			if n, err := strconv.ParseInt(args[i+1], 10, 64); err == nil && n > 0 {
-				return n << 20
-			}
-		}
-	}
-	return moveCheck
-}
-
 // bench measures a path and watches for a hole punch. These are the
 // numbers TODO step 3 exists to produce: throughput, and whether a
 // relayed connection becomes a direct one and how long that took.
-func bench(want, path string, mb, check int64) error {
+func bench(want, path string, mb int64) error {
 	h, err := start()
 	if err != nil {
 		return err
@@ -479,15 +451,7 @@ func bench(want, path string, mb, check int64) error {
 	fmt.Printf("connected to %s over %s\n", identity.Short(peerID.String()), first)
 
 	total := mb << 20
-	// Refuse before sending, not part way through. The far end has
-	// already agreed to receive by here, so a mid-transfer failure
-	// would have cost the relay every byte up to the limit.
-	if first == transport.PathRelay && relayCap > 0 && total > relayCap {
-		return fmt.Errorf("%d MB over a relayed link exceeds the %s cap; raise or clear RATATOSKR_RELAY_CAP",
-			mb, human(relayCap))
-	}
-
-	if err := transfer(ctx, h, s, peerID, mb, total, check); err != nil {
+	if err := transfer(ctx, h, s, peerID, mb, total); err != nil {
 		return err
 	}
 	if first != transport.PathRelay {
@@ -511,7 +475,7 @@ func bench(want, path string, mb, check int64) error {
 	defer s2.Close()
 	again := transport.Describe(s2.Conn()).Path
 	fmt.Printf("second pass over %s\n", again)
-	return transfer(ctx, h, s2, peerID, mb, total, check)
+	return transfer(ctx, h, s2, peerID, mb, total)
 }
 
 // transfer sends the bytes and reports the rate the far end confirms,
@@ -532,18 +496,15 @@ func bench(want, path string, mb, check int64) error {
 // from start to finish. The granularity is one check interval, and that
 // is less a limitation than a preview: the File API's ranged reads are
 // already one request per range, so this comes free once step 4 lands.
-func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total, check int64) error {
+func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total int64) error {
 	start := time.Now()
 	path := transport.Describe(s.Conn()).Path
 	moved := 0
 	sentOnStream := int64(0)
 
 	for sent := int64(0); sent < total; {
-		n := total - sent
-		if check > 0 && check < n {
-			n = check
-		}
-		if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, n); err != nil {
+		n := min(int64(moveCheck), total-sent)
+		if _, err := io.CopyN(s, zeros{}, n); err != nil {
 			return fmt.Errorf("send: %w", err)
 		}
 		sent += n
@@ -650,43 +611,6 @@ func human(n int64) string {
 		}
 	}
 	return fmt.Sprintf("%d bytes", n)
-}
-
-// guard applies the relay cap, and only when the connection is actually
-// relayed: a direct transfer costs nobody anything and is never capped.
-// Both ends guard, because both ends pay.
-//
-// The allowance is per connection rather than per stream. A chunked
-// transfer is many streams on one connection, and a cap that started
-// over with each of them would not be a cap at all.
-// ponytail: the map is never pruned; a process that ran for weeks and
-// met thousands of peers would want it keyed off a disconnect notice.
-func guard(c network.Conn, w io.Writer) io.Writer {
-	if relayCap <= 0 || transport.Describe(c).Path != transport.PathRelay {
-		return w
-	}
-	left, _ := budgets.LoadOrStore(c, new(atomic.Int64))
-	b := left.(*atomic.Int64)
-	b.CompareAndSwap(0, relayCap)
-	return &capped{w: w, left: b}
-}
-
-var budgets sync.Map // network.Conn -> *atomic.Int64, bytes still allowed
-
-// capped fails the transfer at the limit rather than truncating it. A
-// copy that stops early and reports success is how a half-written file
-// gets mistaken for a whole one.
-type capped struct {
-	w    io.Writer
-	left *atomic.Int64
-}
-
-func (c *capped) Write(p []byte) (int, error) {
-	if c.left.Add(-int64(len(p))) < 0 {
-		return 0, fmt.Errorf("relayed transfer hit the %s limit; raise or clear RATATOSKR_RELAY_CAP",
-			human(relayCap))
-	}
-	return c.w.Write(p)
 }
 
 // zeros is an endless reader. The bytes are incompressible enough for

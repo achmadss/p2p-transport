@@ -27,12 +27,6 @@ bare=${2:-15}
 # so it does not matter which machine takes which — only that they differ.
 role=${PUNCH_ROLE:-dial}
 
-# One published port is wrong on a carrier that gives the next port to
-# the next destination, and the real one is a step or two away. Setting
-# this writes to that many ports above the published one, which opens a
-# filter entry for each and lets the peer's real port answer.
-export RATATOSKR_PUNCH_SPREAD=${RATATOSKR_PUNCH_SPREAD:-0}
-
 RATATOSKR=${RATATOSKR:-./dist/ratatoskr}
 export RATATOSKR_PUNCH_ROOM=$room
 export RATATOSKR_PUNCH_RAW=$bare

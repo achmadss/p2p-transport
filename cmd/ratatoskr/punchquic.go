@@ -115,12 +115,6 @@ func punchQUIC(role string) error {
 	// QUIC drops the junk as unparseable, which is the point — it opens
 	// the hole without pretending to be a handshake.
 	//
-	// It spreads over the same ports as the bare punch, or the two
-	// phases would not be comparable. With the window set to zero the
-	// bare punch does not run at all, and if only it could aim at the
-	// carrier's real port then a failure here would have two causes at
-	// once — QUIC went first, and QUIC went somewhere nobody is. Those
-	// are the two things this run exists to separate.
 	stop := make(chan struct{})
 	go func() {
 		junk := make([]byte, 64)
@@ -130,12 +124,8 @@ func punchQUIC(role string) error {
 				return
 			default:
 			}
-			for off := 0; off <= punchSpread(); off++ {
-				to := *peer
-				to.Port = peer.Port + off
-				rand.Read(junk)
-				tr.WriteTo(junk, &to)
-			}
+			rand.Read(junk)
+			tr.WriteTo(junk, peer)
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
@@ -172,13 +162,6 @@ func punchQUIC(role string) error {
 	fmt.Println("problem, and neither is quic-go: whatever fails in `connect` fails")
 	fmt.Println("above them both.")
 	return nil
-}
-
-// punchSpread is how many ports above the published one to write to.
-// Both phases read it, because a control that aims differently from the
-// thing it controls for is not a control.
-func punchSpread() int {
-	return config.Int("RATATOSKR_PUNCH_SPREAD", 0)
 }
 
 // bareWindow reads how long to punch with bare packets.
@@ -236,26 +219,6 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 	var mu sync.Mutex
 	var sent int
 	var sendErr error
-	// Aim at a range of ports, not one.
-	//
-	// This carrier gives the next port to the next destination: the
-	// rendezvous saw 9308 and a reflector saw 9309 on one socket, twice
-	// over. So the port it uses toward the peer is a third value nobody
-	// observed, and the single published port is guaranteed wrong. It is
-	// also, on this evidence, only a step or two away — and the peer's
-	// NAT lets in whatever it has sent to, so writing to a span of ports
-	// opens a filter entry for each and the peer's real one is among
-	// them. Where the packets come back from names it.
-	//
-	// Off by default: on a NAT that keeps one port this is a dozen
-	// pointless packets, and the number that matters is measured before
-	// it is worked around.
-	spread := punchSpread()
-	if spread > 0 {
-		fmt.Printf("  spreading over ports %d-%d, because one of them is the real one.\n",
-			peer.Port, peer.Port+spread)
-	}
-
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -266,20 +229,16 @@ func rawPunch(c *net.UDPConn, peer *net.UDPAddr, window time.Duration) int {
 				return
 			default:
 			}
-			for off := 0; off <= spread; off++ {
-				to := *peer
-				to.Port = peer.Port + off
-				_, err := c.WriteToUDP(p, &to)
-				mu.Lock()
-				if err != nil {
-					if sendErr == nil {
-						sendErr = err
-					}
-				} else {
-					sent++
+			_, err := c.WriteToUDP(p, peer)
+			mu.Lock()
+			if err != nil {
+				if sendErr == nil {
+					sendErr = err
 				}
-				mu.Unlock()
+			} else {
+				sent++
 			}
+			mu.Unlock()
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
