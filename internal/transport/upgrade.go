@@ -54,21 +54,40 @@ var (
 	upgradeDial = config.Duration("RATATOSKR_UPGRADE_DIAL", 5*time.Second)
 )
 
-// watchForRelayed starts a punch loop for every peer that arrives over a
-// relay, in either direction. Both ends must dial for either to get
-// through, and both start counting from the same event — the relayed
-// connection they share — so their ticks land within a round trip of
-// each other without anything being negotiated. That is the agreement
-// DCUtR spends a round trip reaching, had for free, and it is why this
-// loop does not jitter its clock.
+// watchForRelayed starts a punch loop for every peer that is reachable
+// only through a relay, in either direction. Both ends must dial for
+// either to get through, and both start counting from the same event —
+// the relayed connection they share — so their ticks land within a
+// round trip of each other without anything being negotiated. That is
+// the agreement DCUtR spends a round trip reaching, had for free, and
+// it is why this loop does not jitter its clock.
+//
+// It watches disconnections as well, because the ladder is climbed in
+// both directions. A direct connection that dies leaves the relayed one
+// beside it still carrying the session — libp2p goes back to it for
+// every stream opened after — and no new connection arrives to say so.
+// Without this the peer would fall to the relay and stay there with
+// nobody trying to climb back.
 func (t *Host) watchForRelayed() {
 	t.h.Network().Notify(&network.NotifyBundle{
-		ConnectedF: func(_ network.Network, c network.Conn) {
-			if pathOfConn(c) == PathRelay {
-				go t.upgrade(c.RemotePeer())
-			}
-		},
+		ConnectedF:    func(_ network.Network, c network.Conn) { t.punchIfRelayed(c.RemotePeer()) },
+		DisconnectedF: func(_ network.Network, c network.Conn) { t.punchIfRelayed(c.RemotePeer()) },
 	})
+}
+
+// punchIfRelayed starts the loop when the relay is the best this
+// machine currently has to a peer, and reports whether it did.
+//
+// It asks for the best path rather than looking at the connection it
+// was handed. A second relayed connection to a peer already reached
+// directly is not a reason to punch, and a direct connection closing is
+// not a reason not to.
+func (t *Host) punchIfRelayed(id peer.ID) bool {
+	if t.PathTo(id) != PathRelay {
+		return false
+	}
+	go t.upgrade(id)
+	return true
 }
 
 // upgrade re-dials a relayed peer directly until it answers, the peer

@@ -137,3 +137,27 @@ func TestPathLadder(t *testing.T) {
 		}
 	}
 }
+
+// TestPunchOnlyWhenRelayed guards both ends of the ladder. A peer
+// already reached directly must not start a punch loop, or every
+// connection would carry a dial every five seconds for its whole life;
+// and the check has to read the best path rather than the connection it
+// was handed, because the same notifee now fires on disconnects too.
+func TestPunchOnlyWhenRelayed(t *testing.T) {
+	a, b := newHost(t), newHost(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Connect(ctx, peer.AddrInfo{ID: b.ID(), Addrs: b.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &Host{h: a, done: make(chan struct{})}
+	defer h.Close()
+
+	if h.punchIfRelayed(b.ID()) {
+		t.Error("started a punch loop for a peer it already reaches directly")
+	}
+	if h.punchIfRelayed(newHost(t).ID()) {
+		t.Error("started a punch loop for a peer it has no connection to")
+	}
+}

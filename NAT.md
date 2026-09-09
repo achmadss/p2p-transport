@@ -973,3 +973,25 @@ of DCUtR's three attempts, an address exchange that recovers the LAN
 address identify discards over a public connection, and a transfer that
 moves itself onto a better path while it is running. Which of them made
 the difference on the hotspot is not known either.
+
+### 9 Sep 2026: the ladder is climbed in both directions
+
+`watchForRelayed` hooked `ConnectedF` only, which is half a ladder. A
+direct connection that dies leaves the relayed one beside it still
+carrying the session — libp2p goes back to it for every stream opened
+afterwards — and no *new* connection arrives to say so. The punch loop
+had already exited when the path went direct, so a peer that fell back
+to the relay stayed there with nobody trying to climb again.
+
+Both hooks now call `punchIfRelayed`, which asks for the best path
+rather than looking at the connection it was handed: a second relayed
+connection to a peer already reached directly is not a reason to punch,
+and a direct connection closing is not a reason not to.
+
+What this still does not do is redial a peer it has no connection to at
+all. When every path drops there is nothing left to notice the loss, and
+choosing whether to reconnect — how often, for how long, and whether the
+user is still waiting — is a session's decision rather than the
+transport's. It arrives with the File API in step 4, alongside resume:
+a transfer whose stream dies mid-flight loses the segment in flight,
+and ranged reads are what make that a retry instead of a restart.
