@@ -988,10 +988,18 @@ rather than looking at the connection it was handed: a second relayed
 connection to a peer already reached directly is not a reason to punch,
 and a direct connection closing is not a reason not to.
 
-What this still does not do is redial a peer it has no connection to at
-all. When every path drops there is nothing left to notice the loss, and
-choosing whether to reconnect — how often, for how long, and whether the
-user is still waiting — is a session's decision rather than the
-transport's. It arrives with the File API in step 4, alongside resume:
-a transfer whose stream dies mid-flight loses the segment in flight,
-and ranged reads are what make that a retry instead of a restart.
+That still left the case where nothing is left at all — a LAN-only
+session whose Wi-Fi drops has no second connection to fall back to, so
+`repair` saw `unknown`, and nothing happened. `restore` covers it: for
+30 seconds it dials every direct address the peerstore kept from
+identify, all of them in one call so the LAN wins on latency where it
+exists, and only when that finds nothing does it dial the relay.
+Landing on the relay is not the end, because that arrival starts the
+punch loop and the ladder is climbed again from below.
+
+Two things it deliberately cannot do. It cannot ask the peer where it
+lives — `AddrsProto` needs a connection, and this runs when there is
+none — so it works from the peerstore, which identify filled while the
+connection was up. And it cannot save the request that was in flight:
+a stream dies with its connection, and reissuing it is resume, which
+arrives with the File API's ranged reads in step 5.

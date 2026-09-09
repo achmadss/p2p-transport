@@ -103,10 +103,16 @@ type Host struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	// upgrading names the peers a punch loop is already running for, so
-	// that a second relayed connection to the same peer does not start
-	// a second one.
-	upgrading sync.Map // peer.ID -> struct{}
+	// working names the peers a repair is already running for — a punch
+	// up the ladder or a redial back down it — so that a second
+	// connection event does not start a second one.
+	working sync.Map // peer.ID -> struct{}
+
+	// circuits are the configured relays as dialable addresses, kept so
+	// the bottom rung can be reached again after every other one has
+	// gone. Empty on a LAN-only agent, which then has no bottom rung
+	// and says so by failing rather than by hanging.
+	circuits []multiaddr.Multiaddr
 }
 
 // New starts a host under the given identity.
@@ -201,7 +207,16 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 	}
 	HandleObserved(h)
 	HandleAddrs(h)
-	t := &Host{h: h, done: make(chan struct{})}
+	// ParseAddrs has already refused anything unparseable above, so a
+	// relay that fails here is one the circuit suffix broke, which
+	// cannot happen for an address that parsed.
+	var circuits []multiaddr.Multiaddr
+	for _, r := range relays {
+		if a, err := multiaddr.NewMultiaddr(r + "/p2p-circuit"); err == nil {
+			circuits = append(circuits, a)
+		}
+	}
+	t := &Host{h: h, done: make(chan struct{}), circuits: circuits}
 	t.watchForRelayed()
 	// Both of these exist to get off a relay, so neither runs without
 	// one. A LAN-only agent has no peer that could be told a public

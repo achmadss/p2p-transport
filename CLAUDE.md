@@ -247,13 +247,16 @@ the change because it reads the live connections. This is Tailscale's
 shape, not DCUtR's: DCUtR still runs, tries three times at connection
 time, and whichever of the two lands first ends both.
 
-The ladder is climbed in both directions. A direct connection that dies
-leaves the relayed one beside it still carrying the session, and no new
-connection arrives to announce that — so the same notifee watches
-disconnects, and `punchIfRelayed` starts the loop again whenever the
-relay is the best path this machine has. What nothing here does is
-redial a peer it has *no* connection to: that is a session's decision,
-not the transport's, and it arrives with the File API.
+The ladder is walked in both directions, and `repair` is the one place
+that decides which. Both notifee hooks call it on every connect and
+disconnect, and it reads the *best* path to the peer rather than the
+connection that fired: on `relay` it climbs, with the punch loop; on
+`unknown` — every path gone — it descends, with `restore`, which tries
+all known direct addresses in one dial and only then the configured
+relay, for 30 seconds. Landing on the relay is not the end of it, since
+that arrival starts the punch loop again. What still belongs above the
+transport is a *stream* that dies mid-request: reissuing it is resume,
+and it arrives with the File API's ranged reads.
 
 Each retry races the whole ladder — LAN, then the Internet, then the
 relay it is already running on — rather than walking it, because the

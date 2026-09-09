@@ -138,12 +138,14 @@ func TestPathLadder(t *testing.T) {
 	}
 }
 
-// TestPunchOnlyWhenRelayed guards both ends of the ladder. A peer
-// already reached directly must not start a punch loop, or every
-// connection would carry a dial every five seconds for its whole life;
-// and the check has to read the best path rather than the connection it
-// was handed, because the same notifee now fires on disconnects too.
-func TestPunchOnlyWhenRelayed(t *testing.T) {
+// TestRepairReadsTheRungNotTheEvent guards the branch both notifee
+// hooks share. A peer already reached directly must start nothing, or
+// every connection would carry a dial every five seconds for its whole
+// life; a peer on the relay climbs; a peer with nothing left is chased
+// back down. The decision has to come from the best path rather than
+// from the connection that fired the event, because the same notifee
+// now runs on connect and disconnect both.
+func TestRepairReadsTheRungNotTheEvent(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -154,10 +156,10 @@ func TestPunchOnlyWhenRelayed(t *testing.T) {
 	h := &Host{h: a, done: make(chan struct{})}
 	defer h.Close()
 
-	if h.punchIfRelayed(b.ID()) {
-		t.Error("started a punch loop for a peer it already reaches directly")
+	if p := h.repair(b.ID()); p != PathLAN {
+		t.Errorf("a peer reached over loopback repaired as %s, want lan", p)
 	}
-	if h.punchIfRelayed(newHost(t).ID()) {
-		t.Error("started a punch loop for a peer it has no connection to")
+	if p := h.repair(newHost(t).ID()); p != PathUnknown {
+		t.Errorf("a peer with no connection repaired as %s, want unknown", p)
 	}
 }

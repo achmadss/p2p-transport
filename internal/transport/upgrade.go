@@ -70,33 +70,111 @@ var (
 // nobody trying to climb back.
 func (t *Host) watchForRelayed() {
 	t.h.Network().Notify(&network.NotifyBundle{
-		ConnectedF:    func(_ network.Network, c network.Conn) { t.punchIfRelayed(c.RemotePeer()) },
-		DisconnectedF: func(_ network.Network, c network.Conn) { t.punchIfRelayed(c.RemotePeer()) },
+		ConnectedF:    func(_ network.Network, c network.Conn) { t.repair(c.RemotePeer()) },
+		DisconnectedF: func(_ network.Network, c network.Conn) { t.repair(c.RemotePeer()) },
 	})
 }
 
-// punchIfRelayed starts the loop when the relay is the best this
-// machine currently has to a peer, and reports whether it did.
+// repair puts a peer back on the best rung it can reach, and returns
+// the rung it found it on.
 //
 // It asks for the best path rather than looking at the connection it
 // was handed. A second relayed connection to a peer already reached
-// directly is not a reason to punch, and a direct connection closing is
-// not a reason not to.
-func (t *Host) punchIfRelayed(id peer.ID) bool {
-	if t.PathTo(id) != PathRelay {
-		return false
+// directly is not a reason to punch, a direct connection closing is not
+// a reason not to, and the last connection closing is a different
+// problem from a worse one being left behind.
+func (t *Host) repair(id peer.ID) Path {
+	p := t.PathTo(id)
+	switch p {
+	case PathRelay:
+		go t.upgrade(id) // something better may still be opened
+	case PathUnknown:
+		go t.restore(id) // nothing is left; climb back down
 	}
-	go t.upgrade(id)
-	return true
+	return p
+}
+
+// restoreFor bounds how long a peer that has gone entirely is chased.
+//
+// Long enough to outlast a Wi-Fi handover or a sleeping radio, short
+// enough that a machine genuinely switched off is not dialled for the
+// life of the process. When it expires the peer is simply gone, and the
+// next request from above dials it afresh.
+const restoreFor = 30 * time.Second
+
+// restore climbs back down the ladder when every path to a peer has
+// gone.
+//
+// The rungs are tried in order and the order is the point: everything
+// direct that is known, raced in one dial so the LAN wins on latency
+// where it exists, and the relay only once that has found nothing. A
+// relayed connection is worth having and worth leaving, so landing on
+// it is not the end — the notifee sees it arrive and starts the punch
+// loop, which is the same ladder climbed the other way.
+//
+// It cannot ask the peer where it lives, because AddrsProto needs a
+// connection and there is none. What it has is the peerstore, which
+// identify filled while the connection was up and which outlives it.
+func (t *Host) restore(id peer.ID) {
+	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
+		return
+	}
+	defer t.working.Delete(id)
+
+	tick := time.NewTicker(upgradeEvery)
+	defer tick.Stop()
+	deadline := time.After(restoreFor)
+	for {
+		if t.PathTo(id) != PathUnknown {
+			return // it came back, by our dial or by theirs
+		}
+		t.redial(id)
+		select {
+		case <-t.done:
+			return
+		case <-deadline:
+			if os.Getenv("RATATOSKR_DIAG") != "" {
+				fmt.Fprintf(os.Stderr, "gave up reaching %s after %s\n",
+					identity.Short(id.String()), restoreFor)
+			}
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// redial tries the direct rungs together, then the relay if they found
+// nothing. Nothing is forced past an existing connection here the way
+// dialDirect forces: there is no connection to get past, and forcing
+// would rule out the one rung that is left.
+func (t *Host) redial(id peer.ID) {
+	if direct := directOnly(t.h.Peerstore().Addrs(id)); len(direct) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
+		err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: direct})
+		cancel()
+		if err == nil {
+			return
+		}
+	}
+	if len(t.circuits) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), upgradeDial)
+	defer cancel()
+	if err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: t.circuits}); err != nil {
+		if os.Getenv("RATATOSKR_DIAG") != "" {
+			fmt.Fprintf(os.Stderr, "no rung left to %s: %v\n", identity.Short(id.String()), err)
+		}
+	}
 }
 
 // upgrade re-dials a relayed peer directly until it answers, the peer
 // goes away, or the host closes.
 func (t *Host) upgrade(id peer.ID) {
-	if _, running := t.upgrading.LoadOrStore(id, struct{}{}); running {
+	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
 		return
 	}
-	defer t.upgrading.Delete(id)
+	defer t.working.Delete(id)
 
 	tick := time.NewTicker(upgradeEvery)
 	defer tick.Stop()
