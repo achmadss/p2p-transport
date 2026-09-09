@@ -39,6 +39,16 @@ const (
 	defaultPort     = 4001
 	defaultData     = 64 << 30
 	defaultDuration = time.Hour
+
+	// fallbackTCP is the second TCP port heimdall answers on.
+	//
+	// Some networks pass 443 and drop everything else, which is why
+	// Tailscale's DERP relays sit there. A relay nobody on such a
+	// network can reach is a relay that is not a fallback. Binding it
+	// needs root or CAP_NET_BIND_SERVICE; when the process has
+	// neither, that listener simply does not come up and the others
+	// still do, so this costs an unprivileged deploy nothing.
+	fallbackTCP = 443
 )
 
 func main() {
@@ -48,9 +58,14 @@ func main() {
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR       where identity.key lives
   HEIMDALL_PORT              listen port, UDP and TCP          (4001)
+                             TCP 443 is answered as well when the
+                             process may bind it, for networks that
+                             pass only 443.
   HEIMDALL_ANNOUNCE          comma-separated public multiaddrs to
                              advertise instead of what the machine
-                             sees. Needed behind a cloud NAT.
+                             sees. Needed behind a cloud NAT, and it
+                             replaces the whole set — list the 443
+                             address too if you want it reachable.
   HEIMDALL_CIRCUIT_DATA      bytes per circuit, K/M/G suffixes  (64G)
   HEIMDALL_CIRCUIT_DURATION  lifetime per circuit               (1h)
 `)
@@ -75,6 +90,7 @@ func run() error {
 		libp2p.ListenAddrStrings(
 			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port),
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port),
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", fallbackTCP),
 		),
 	}
 
@@ -124,6 +140,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Printing what actually bound is the only way to tell whether 443
+	// came up: a listener that could not bind is not an error here, and
+	// its absence from this list is the report.
 	fmt.Println("heimdall relaying. put one of these in each agent's config.json:")
 	for _, a := range addrs {
 		fmt.Println("  ", a)

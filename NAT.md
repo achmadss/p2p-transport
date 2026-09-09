@@ -946,3 +946,30 @@ connection reports the LAN.
 
 What is still owed is the same test between networks: a hotspot and a
 home line, where the carrier renumbers and nothing has ever landed.
+
+### 9 Sep 2026: the punch lands, and the number is missing
+
+The owner reports that the remaining runs passed, including the one
+this notebook was written around failing: home Wi-Fi to a phone
+hotspot, direct. Also macOS↔Windows↔Linux with both peers behind one
+NAT.
+
+The output was not captured, so this entry records a verdict and not a
+measurement — which is the one thing every retracted section above has
+in common. It is written down that way on purpose. What is known is
+that a direct path opened on a carrier that renumbers per destination.
+What is not known is how long it took, how often it succeeds, or how
+old the serving agent was — and those are exactly the variables that
+turned three earlier readings into retractions.
+
+So: the punch works here, and nobody should quote a rate for it.
+Anyone building on the direct path should re-run the pair with
+`RATATOSKR_DIAG=1` and paste the result in below this line.
+
+What was built between the failures and this: a set of addresses
+re-measured every 27 seconds instead of one taken at startup, a punch
+retried every five seconds for as long as a peer stays relayed instead
+of DCUtR's three attempts, an address exchange that recovers the LAN
+address identify discards over a public connection, and a transfer that
+moves itself onto a better path while it is running. Which of them made
+the difference on the hotspot is not known either.

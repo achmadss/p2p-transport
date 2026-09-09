@@ -138,6 +138,13 @@ func New(key crypto.PrivKey, relays []string) (*Host, error) {
 		// connection into a direct one when both ends can be punched
 		// through. Both are why the relay is a fallback and not a bill.
 		libp2p.EnableNATService(),
+		// v1 asks a peer to dial back and takes a majority verdict; v2
+		// asks one peer about one address and is told which. That
+		// matters here because a private drive never has the several
+		// independent peers v1 wants, which is the same shortage that
+		// makes ForceReachabilityPrivate necessary below. v0.49 ships
+		// it opt-in, and it runs beside v1 rather than replacing it.
+		libp2p.EnableAutoNATv2(),
 		libp2p.EnableHolePunching(holepunch.WithAddrFilter(punchFilter{hasIPv6: hasGlobalIPv6, now: mine})),
 		// Ask the home router to forward a port, the way a torrent
 		// client does. This is what makes a relay a genuine last

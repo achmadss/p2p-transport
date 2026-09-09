@@ -96,14 +96,12 @@ choice. Do it before anything depends on the answer.
       `SPEC.md` §1 allows the relay to carry file data when no direct
       path can be opened, and the owner has said plainly that using it
       is not a failure.
-- [ ] Test: home Wi-Fi to phone hotspot, *direct*. A punch lands in
-      251 ms only when the agent is seconds old; minutes later the
-      carrier's port is unrelated to any address a third party can
-      observe, and nothing offered — a measured address, a span of five,
-      a span of sixty-six — has landed since. This is the common case
-      rather than the hard one, so leaving it relayed for ever is what
-      §6 forbids; the transfer still works meanwhile. The procedure is
-      in `NAT.md`, under "What is left".
+- [x] Test: home Wi-Fi to phone hotspot, *direct*. Passed 9 Sep 2026,
+      on the owner's runs. This is the finding the whole of `NAT.md`
+      was written around failing, and the numbers behind it were not
+      captured — so `NAT.md` records it as passed and unquantified, and
+      the next person to touch the punch should re-measure rather than
+      trust a rate that was never written down.
 - [x] Read Tailscale and take what applies (`NAT.md`). Read 7 Sep 2026;
       the decision is written down and built 8 Sep 2026
 - [x] Publish a *set* of independently measured addresses, refreshed
@@ -129,18 +127,20 @@ choice. Do it before anything depends on the answer.
       in libp2p or in QUIC; checking `PathTo` every few MB and finishing
       the stream is the whole mechanism, and it is what ranged reads
       give the File API for free. Built 9 Sep 2026, unmeasured.
-- [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
+- [x] Test: macOS↔Windows↔Linux; both peers behind the same NAT.
+      Passed 9 Sep 2026, on the owner's runs.
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
       how a torrent client stays off relays. Kept even though this house
       is behind carrier NAT and it cannot help here.
-- [ ] Enable AutoNAT v2 (`libp2p.EnableAutoNATv2()`) in
-      `internal/transport`. v0.49 ships it opt-in and the host runs
-      without it, so reachability rests on v1 probes and observed
-      addresses from identify.
-- [ ] Move heimdall's TCP listener to port 443 (`cmd/heimdall`). Some
-      networks drop 4001 and pass 443; Tailscale's DERP relays sit on
-      443 for the same reason.
+- [x] Enable AutoNAT v2 (`libp2p.EnableAutoNATv2()`) in
+      `internal/transport`, beside v1 rather than instead of it
+- [x] heimdall answers TCP 443 as well as `HEIMDALL_PORT`, for networks
+      that pass only 443. Binding it needs root or
+      CAP_NET_BIND_SERVICE; without either it does not come up and the
+      other listeners still do. **Not yet deployed** — the running VPS
+      needs the new binary, the capability, and the 443 address added
+      to `HEIMDALL_ANNOUNCE`, which replaces the whole advertised set.
 
 **The measurements are in `NAT.md`.** It carries the numbers, the three
 readings that turned out to be wrong, the Tailscale reading that decided
@@ -161,15 +161,21 @@ wins without being sequenced.
 exist on paper. If throughput or punch rate is bad, stop and reconsider
 here rather than at step 9.
 
-**Verdict: pass on connectivity, open on the direct path.** Machines on
-different networks connect, transfer, and verify their byte counts, and
-the relay carrying them is a permitted outcome rather than a failed one.
-The punch rate is zero, and `NAT.md` traces why through three wrong
-readings to a carrier that renumbers per destination. It changes
-what the later steps must assume: a transfer may run at relay speed for
-its whole life, so resume, progress and cancellation are load-bearing
-rather than polish, and step 11's metering is what stops one such
-transfer from spending a month of VPS egress.
+**Verdict: pass.** Machines on different networks connect, transfer,
+and verify their byte counts. The relay carries what cannot be punched,
+which `SPEC.md` §1 permits, and it is no longer the normal path: a
+relayed pair on one LAN reached the LAN in ten seconds and ran at
+107.7 MB/s, a transfer already in flight moved itself across without
+being restarted, and the hotspot-to-home-line punch that this step
+existed to doubt now lands. libp2p is the right choice on the evidence.
+
+Two things the later steps still inherit. The hotspot number was never
+written down, so the punch rate on a renumbering carrier is known to be
+non-zero and not known to be anything more precise — re-measure before
+building on it. And a transfer can still spend its life on the relay
+when the punch does not land, so resume, progress and cancellation are
+load-bearing rather than polish, and step 11's metering is what stops
+one such transfer from spending a month of VPS egress.
 
 ---
 

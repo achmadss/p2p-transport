@@ -65,29 +65,32 @@ gained `--via lan|relay|auto` with step 3.
 load-bearing, not tidiness: a peer found on the LAN must be reached on
 the LAN or not at all.
 
-**TODO step 3 is open, and it is the step that matters.** `cmd/heimdall`
+**TODO step 3 is done, and it was the step that could have failed.** `cmd/heimdall`
 is a circuit relay v2 node on a real VPS. The agent always enables
 AutoNAT and DCUtR, and adds the relay client and a forced reservation
 when `config.json` names a relay; `connect --via lan|relay|auto` picks
 a path, and `auto` gives the LAN a 400 ms head start, per `PLAN.md` §6.
 LAN and relay are measured: 65 MB/s over Wi-Fi, 3.7 MB/s relayed.
 
-**What is not solved is a *direct* path from a phone on a public network
-to a laptop at home, and that is the ordinary case rather than an edge
-one.** The carrier tested gives every new destination an unrelated port,
-so no address a third party observes names the door a peer must dial,
-and every aim tried so far has missed. The relay carries this case
-meanwhile and carries it properly: `SPEC.md` §1 allows the fallback,
-the owner has confirmed that using it is not a failure, and a transfer
-that goes over heimdall is a transfer that happened. What is wrong is
-only that on this carrier the fallback would be the *normal* path,
-which §6 forbids — so the punch is an upgrade worth going on working
-at, not a precondition for the product. The numbers, the three readings
-that turned out to be wrong, and the Tailscale reading that decided the
-design are all in `NAT.md`; `TODO.md` step 3 has the work list. What
-came out of it is built and unmeasured: a *set* of addresses re-measured
-every 27 seconds, and a punch retried every five seconds for as long as
-a peer stays relayed rather than DCUtR's three attempts.
+**The direct path across a carrier NAT works, and the number behind it
+is missing.** For most of this step it did not: the carrier tested
+gives every new destination an unrelated port, so no address a third
+party observes names the door a peer must dial, and every aim tried
+failed. On 9 Sep 2026 the owner's runs passed, hotspot to home line
+included, without the output being captured. `NAT.md` records that as a
+verdict rather than a measurement, and says so — re-measure before
+building on a rate, because unrecorded readings are what every
+retraction in that file has in common.
+
+What was built in between, and is all in place: a *set* of addresses
+re-measured every 27 seconds rather than one taken at startup, a punch
+retried every five seconds for as long as a peer stays relayed rather
+than DCUtR's three attempts, `/ratatoskr/addrs/1.0.0` to recover the
+LAN address identify discards over a public connection, and a transfer
+that moves itself onto a better path while it is still running. The
+relay remains the fallback and carrying file data over it is not a
+failure: `SPEC.md` §1 permits it, and §6 only forbids it being the
+*normal* path.
 
 Tailscale is cloned at `/Users/achmad/Documents/Belajar/tailscale` — a
 sibling to read, not a dependency; nothing here imports it and
