@@ -864,3 +864,41 @@ Unmeasured, like everything else built in this section. The test is in
 `TODO.md` step 3: two machines on one LAN, `--via relay`, and the
 second pass must run over a private address with heimdall's counters
 flat.
+
+### Built 9 Sep 2026: moving a transfer that is already running
+
+The second pass in `bench` exists because the first one could not move.
+A libp2p stream is bound to the connection it was opened on — there is
+no stream migration in libp2p, and QUIC's own migration is not the
+thing it sounds like: RFC 9000 §9 moves one connection between *local*
+addresses, client-initiated only (`quic-go/connection.go:1261`, and
+`:3085` refuses it from a server). The relay and the peer are two
+remote endpoints with two handshakes and two Noise sessions. There is
+no path to migrate along.
+
+So the transfer moves and the connection does not. `bench --chunk N`
+sends N MB at a time, each chunk on a stream of its own; every new
+stream is handed whatever connection `bestConnToPeer` likes best at
+that moment, so the bytes still unsent take the new path as soon as one
+exists. It prints where the change happened:
+
+```
+connected to VqfZ-X78a over relay
+moved from relay to lan after 24 MB
+100 MB over lan, after 1 move(s) in 11.3s = 8.8 MB/s
+```
+
+The rate over a run that moved is an average of both paths and not
+either of them; the number worth reading is the move line.
+
+Granularity is one chunk, and that is not a limitation of this design
+so much as a preview of the real one: the File API's ranged reads are
+already one request per range, so a transfer that survives a path
+change is what steps 4 and 5 get without asking. What this adds is the
+measurement, now, on the diagnostic that already exists.
+
+One thing it changed underneath: `RATATOSKR_RELAY_CAP` used to be an
+allowance per stream, which for a chunked transfer would have been an
+allowance per chunk — the cap spent over again ten times. It is now one
+allowance per relayed connection, held in a small map both ends read
+through `guard`.

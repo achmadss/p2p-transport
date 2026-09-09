@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -91,7 +93,7 @@ func main() {
 			err = fmt.Errorf("bench needs a machine id")
 			break
 		}
-		err = bench(args[0], via(args[1:]), size(args[1:]))
+		err = bench(args[0], via(args[1:]), size(args[1:]), chunkOf(args[1:]))
 	case "connect":
 		if len(args) == 0 {
 			err = fmt.Errorf("connect needs a machine id or fingerprint")
@@ -117,8 +119,11 @@ func usage() {
   discover [--full]    list Ratatoskr machines on this network
   connect ID [--via lan|relay|auto]
                        connect to a machine by id or fingerprint
-  bench ID [--via ...] [--mb N]
-                       measure throughput to a machine, default 100 MB
+  bench ID [--via ...] [--mb N] [--chunk N]
+                       measure throughput to a machine, default 100 MB.
+                       --chunk sends it N MB at a time, each chunk on a
+                       new stream, so a transfer already running moves
+                       onto a better path as soon as one opens
   natcheck             classify this network's NAT, which decides
                        whether a direct connection is possible at all
   punch-quic listen|dial
@@ -139,7 +144,7 @@ environment (empty means the default):
   RATATOSKR_UPGRADE_EVERY   retry the punch on a relayed peer      (5s)
   RATATOSKR_UPGRADE_DIAL    how long one retry may take            (5s)
   RATATOSKR_BENCH_MB        default benchmark size               (100)
-  RATATOSKR_RELAY_CAP       bytes one relayed transfer may move,
+  RATATOSKR_RELAY_CAP       bytes one relayed connection may move,
                             K/M/G suffixes. 0 means no cap.        (0)
   RATATOSKR_ASSUME_PUBLIC   skip the relay reservation on a machine
                             that is genuinely reachable from outside
@@ -421,10 +426,24 @@ func size(args []string) int64 {
 	return int64(config.Int("RATATOSKR_BENCH_MB", 100))
 }
 
+// chunkOf reads --chunk, in MB. Zero, the default, sends the whole
+// transfer on a single stream, which is what one ranged read will look
+// like when the File API lands.
+func chunkOf(args []string) int64 {
+	for i, a := range args {
+		if a == "--chunk" && i+1 < len(args) {
+			if n, err := strconv.ParseInt(args[i+1], 10, 64); err == nil && n > 0 {
+				return n << 20
+			}
+		}
+	}
+	return 0
+}
+
 // bench measures a path and watches for a hole punch. These are the
 // numbers TODO step 3 exists to produce: throughput, and whether a
 // relayed connection becomes a direct one and how long that took.
-func bench(want, path string, mb int64) error {
+func bench(want, path string, mb, chunk int64) error {
 	h, err := start()
 	if err != nil {
 		return err
@@ -459,7 +478,7 @@ func bench(want, path string, mb int64) error {
 			mb, human(relayCap))
 	}
 
-	if err := transfer(s, mb, total, first); err != nil {
+	if err := transfer(ctx, h, s, peerID, mb, total, chunk); err != nil {
 		return err
 	}
 	if first != transport.PathRelay {
@@ -483,35 +502,87 @@ func bench(want, path string, mb int64) error {
 	defer s2.Close()
 	again := transport.Describe(s2.Conn()).Path
 	fmt.Printf("second pass over %s\n", again)
-	return transfer(s2, mb, total, again)
+	return transfer(ctx, h, s2, peerID, mb, total, chunk)
 }
 
 // transfer sends the bytes and reports the rate the far end confirms.
-func transfer(s network.Stream, mb, total int64, path transport.Path) error {
+//
+// With --chunk it sends them a chunk at a time, each chunk on a stream
+// of its own, and that is the only way a transfer already in flight
+// changes path. Nothing migrates. A libp2p stream is bound to the
+// connection it was opened on, and QUIC's own migration moves one
+// connection between local addresses rather than between two
+// connections to two different remote endpoints — the relay and the
+// peer are two endpoints with two handshakes, so there is nothing there
+// to migrate along. What moves instead is the transfer: every new
+// stream is handed the best connection there is at that moment, and the
+// bytes not yet sent go the new way. The granularity is one chunk,
+// which is what the File API will get for free from ranged reads.
+func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total, chunk int64) error {
 	start := time.Now()
-	if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, total); err != nil {
-		return fmt.Errorf("send: %w", err)
-	}
-	if err := s.CloseWrite(); err != nil {
-		return fmt.Errorf("half close: %w", err)
-	}
-	reply, err := bufio.NewReader(s).ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read: %w", err)
+	path := transport.Describe(s.Conn()).Path
+	moved := 0
+
+	for sent := int64(0); sent < total; {
+		n := total - sent
+		if chunk > 0 && chunk < n {
+			n = chunk
+		}
+		got, err := sendChunk(s, n)
+		s.Close()
+		if err != nil {
+			return err
+		}
+		if got != n {
+			return fmt.Errorf("sent %d bytes, far end received %d", n, got)
+		}
+		sent += n
+		if sent == total {
+			break
+		}
+
+		if s, err = h.Open(ctx, id, transport.BenchProto); err != nil {
+			return fmt.Errorf("chunk at %s: %w", human(sent), err)
+		}
+		if p := transport.Describe(s.Conn()).Path; p != path {
+			fmt.Printf("moved from %s to %s after %s\n", path, p, human(sent))
+			path, moved = p, moved+1
+		}
 	}
 	elapsed := time.Since(start)
 
-	got, err := strconv.ParseInt(strings.TrimSpace(reply), 10, 64)
-	if err != nil {
-		return fmt.Errorf("far end reported %q, not a byte count", strings.TrimSpace(reply))
+	// The rate is over the whole transfer, so a run that moved part way
+	// through reports an average of both paths and not either of them.
+	// The number to read there is the one the move line gives: where it
+	// happened, and how much was still to send.
+	where := string(path)
+	if moved > 0 {
+		where = fmt.Sprintf("%s, after %d move(s)", path, moved)
 	}
-	if got != total {
-		return fmt.Errorf("sent %d bytes, far end received %d", total, got)
-	}
-
-	fmt.Printf("%d MB over %s in %s = %.1f MB/s\n", mb, path, elapsed.Round(time.Millisecond),
+	fmt.Printf("%d MB over %s in %s = %.1f MB/s\n", mb, where, elapsed.Round(time.Millisecond),
 		float64(total)/(1<<20)/elapsed.Seconds())
 	return nil
+}
+
+// sendChunk writes one chunk and returns the byte count the far end
+// confirms. The far end counts to end of stream, so each chunk is
+// half-closed and acknowledged before the next one opens.
+func sendChunk(s network.Stream, n int64) (int64, error) {
+	if _, err := io.CopyN(guard(s.Conn(), s), zeros{}, n); err != nil {
+		return 0, fmt.Errorf("send: %w", err)
+	}
+	if err := s.CloseWrite(); err != nil {
+		return 0, fmt.Errorf("half close: %w", err)
+	}
+	reply, err := bufio.NewReader(s).ReadString('\n')
+	if err != nil {
+		return 0, fmt.Errorf("read: %w", err)
+	}
+	got, err := strconv.ParseInt(strings.TrimSpace(reply), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("far end reported %q, not a byte count", strings.TrimSpace(reply))
+	}
+	return got, nil
 }
 
 // watchUpgrade waits to see whether the relayed connection becomes a
@@ -560,24 +631,34 @@ func human(n int64) string {
 // guard applies the relay cap, and only when the connection is actually
 // relayed: a direct transfer costs nobody anything and is never capped.
 // Both ends guard, because both ends pay.
+//
+// The allowance is per connection rather than per stream. A chunked
+// transfer is many streams on one connection, and a cap that started
+// over with each of them would not be a cap at all.
+// ponytail: the map is never pruned; a process that ran for weeks and
+// met thousands of peers would want it keyed off a disconnect notice.
 func guard(c network.Conn, w io.Writer) io.Writer {
-	if relayCap > 0 && transport.Describe(c).Path == transport.PathRelay {
-		return &capped{w: w, left: relayCap}
+	if relayCap <= 0 || transport.Describe(c).Path != transport.PathRelay {
+		return w
 	}
-	return w
+	left, _ := budgets.LoadOrStore(c, new(atomic.Int64))
+	b := left.(*atomic.Int64)
+	b.CompareAndSwap(0, relayCap)
+	return &capped{w: w, left: b}
 }
+
+var budgets sync.Map // network.Conn -> *atomic.Int64, bytes still allowed
 
 // capped fails the transfer at the limit rather than truncating it. A
 // copy that stops early and reports success is how a half-written file
 // gets mistaken for a whole one.
 type capped struct {
 	w    io.Writer
-	left int64
+	left *atomic.Int64
 }
 
 func (c *capped) Write(p []byte) (int, error) {
-	c.left -= int64(len(p))
-	if c.left < 0 {
+	if c.left.Add(-int64(len(p))) < 0 {
 		return 0, fmt.Errorf("relayed transfer hit the %s limit; raise or clear RATATOSKR_RELAY_CAP",
 			human(relayCap))
 	}

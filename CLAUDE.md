@@ -260,6 +260,15 @@ circuit through a relay on a VPS is a public connection, so two
 machines on one LAN that meet over heimdall are never told each other's
 LAN address by libp2p. `askAddrs` asks the peer directly each tick.
 
+A stream, though, never moves: it is bound to the connection it was
+opened on, and neither libp2p nor QUIC offers a migration that would
+change that (QUIC's moves one connection between *local* addresses; the
+relay and the peer are two remote endpoints). So a transfer that must
+survive the upgrade is sent in chunks, one stream each — `bench
+--chunk N` measures it, and the File API's ranged reads will get it for
+free. `RATATOSKR_RELAY_CAP` is therefore an allowance per relayed
+connection, not per stream.
+
 **Presence and path are different questions.** Presence comes from mimir
 before connecting (`online`/`offline`/`unknown`). The path (`lan`/
 `direct`/`relay`) is measured from the real connection afterwards, and

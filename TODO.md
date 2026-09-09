@@ -116,7 +116,15 @@ choice. Do it before anything depends on the answer.
       this: identify drops every private address it is told over a
       public connection, and a circuit through heimdall is a public
       connection, so libp2p alone never tells either machine the
-      other's LAN address. Built 9 Sep 2026, unmeasured.
+      other's LAN address. Run it with mDNS off — discovery and path
+      are different questions, and mDNS answers the first one only.
+      Built 9 Sep 2026, unmeasured.
+- [ ] Test: `bench --chunk` moves a transfer already running from the
+      relay onto the direct path at a chunk boundary, and heimdall's
+      counters stop climbing there. Nothing migrates a stream, in
+      libp2p or in QUIC; a new stream per chunk is the whole mechanism,
+      and it is what ranged reads give the File API for free.
+      Built 9 Sep 2026, unmeasured.
 - [ ] Test: macOS↔Windows↔Linux; both peers behind the same NAT
 - [x] Serve over the relay immediately, upgrade in the background
 - [x] `libp2p.NATPortMap()`: ask the router to forward a port, which is
