@@ -56,7 +56,7 @@ it is ever wanted; do not re-add any of it here.
 
 ## Current state
 
-**Steps 0 to 4 are done.** The transport works, has been measured, and
+**Steps 0 to 5 are done.** The transport works, has been measured, and
 has the surface an application depends on.
 
 **Step 0** — `transport` is a libp2p host with QUIC and TCP,
@@ -132,8 +132,8 @@ peer id — so the shaper needs a vendored copy of the hop.
 
 **Step 4 — the seam — is done.** `transport` is the module root's public
 package: `New(Config)`, `ID`, `Addrs`, `Connect`, `Open`, `Handle`,
-`Peers`, `PathTo`, `OnLAN`, `Close`, and the `PeerID`, `Stream` and
-`Path` types. `PLAN.md` §2.1 is the whole of it, `transport/api.go` is
+`Peers`, `PathTo`, `Watch`, `OnLAN`, `Close`, the `PeerID`, `Stream` and
+`Path` types, and the `ErrUnreachable` and `ErrNotHandled` sentinels. `PLAN.md` §2.1 is the whole of it, `transport/api.go` is
 where it lives, and everything else in that package is below the seam
 and unexported. `transport/example_test.go` is the check and it is
 mechanical: its import block is `bufio context fmt io os time` plus this
@@ -151,8 +151,22 @@ differ. And a protocol name is now a plain string the caller picks: the
 harness declares its own `echoProto` and `benchProto` the way any
 application would.
 
-**Step 5 is next**: `Watch(id) (<-chan Path, func())`, off the hooks
-`repair` already uses, replacing `bench`'s four-megabyte poll.
+**Step 5 — path changes are pushed.** `Watch(id) (<-chan Path, func())`
+hangs off the same notifee `repair` runs on, so no goroutine and no timer
+were added: connect and disconnect are every event that can change a
+path. `changed` repairs the peer and publishes what repair read. The
+channel buffers one path and drops a stale one, because the writer is
+libp2p's connection hook and must never block on an application that
+stopped reading; the current path is delivered before `Watch` returns, so
+nothing is missed between asking and listening. `bench` lost its
+four-megabyte poll — `writeChunk` is 512 KB and is now only write
+granularity — and `watchUpgrade` lost its ticker.
+
+`ErrUnreachable` and `ErrNotHandled` split the one failure a caller has
+to act on differently: wait on `Watch` and retry, or stop. `Read` and
+`Write` tag a stream that died the same way and leave `io.EOF` alone.
+
+**Step 6 is next**: survival — see `TODO.md`.
 
 Tailscale is cloned at `/Users/a2193/Documents/Personal/tailscale` — a
 sibling to read, not a dependency; nothing here imports it and
@@ -333,8 +347,8 @@ that (QUIC's moves one connection between *local* addresses; the relay
 and the peer are two remote endpoints). So a caller moving bulk data
 checks the path, and when the answer beats the path its stream is on,
 finishes that stream and sends the rest on a new one —
-`Path.BetterThan` holds the order. `ratatoskr bench` does it every four
-megabytes; step 5 replaces that poll with `Watch`. What the transport
+`Path.BetterThan` holds the order. `ratatoskr bench` waits on `Watch` and
+writes in 512 KB chunks between looks. What the transport
 cannot do is save the request that was in flight: reissuing it is
 resume, and resume is the caller's, because only the caller knows what
 an offset means.

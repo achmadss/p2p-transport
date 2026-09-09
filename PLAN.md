@@ -78,6 +78,10 @@ type Stream interface {
 
 type Path string             // lan · direct · relay · unknown
 func (p Path) BetterThan(other Path) bool
+
+// Why a stream is not carrying bytes. Test with errors.Is.
+var ErrUnreachable = errors.New("machine unreachable")
+var ErrNotHandled  = errors.New("protocol not handled")
 ```
 
 That is the whole contract. It fits on a screen on purpose: a surface
@@ -90,6 +94,23 @@ here would make every caller import libp2p to fill it in, which is the
 single thing step 4 exists to prevent. So the transport loads or
 generates the key in `Dir` and never hands it out, and `identity` stays
 `internal/`.
+
+`Watch` is how the third fact in §2.2 stops being a poll. Every event
+that can change a path is a connection opening or closing, and the
+transport already watches for both to drive its own repair, so a watch is
+those hooks forwarded and nothing polls. The current path is delivered
+before `Watch` returns, so a caller cannot miss a change between asking
+where a machine is and starting to listen; the channel then holds one
+value, because a reader that falls behind wants where the machine is now
+rather than every rung it passed.
+
+The two errors are there because a caller acts differently on each. A
+machine that cannot be reached is worth trying again when `Watch` says
+the path changed. A machine that answered and has no handler for that
+protocol name will never answer, and retrying is a loop. Both arrive as a
+failure to open a stream, and without the distinction the caller has only
+a string to match on. What actually went wrong stays wrapped inside for a
+person to read.
 
 An address is a **string the application never parses**. It comes out of
 `Addrs()` on one machine and goes into `Connect` on another, through

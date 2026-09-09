@@ -6,6 +6,7 @@ package transport_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,15 +61,27 @@ func Example() {
 	}
 	fmt.Print(line)
 
-	// Which path the bytes took. A small request need never ask; a
-	// caller moving gigabytes is who this is for.
-	fmt.Println("path:", s.Path(), s.Path().BetterThan(transport.PathRelay))
+	// Which path the bytes are taking, now and whenever it changes. A
+	// small request need never ask; a caller moving gigabytes waits here
+	// and, when a better path arrives, finishes its stream and sends the
+	// rest on a new one.
+	paths, stop := client.Watch(server.ID())
+	defer stop()
+	now := <-paths
+	fmt.Println("path:", now, now.BetterThan(transport.PathRelay))
+
+	// A machine that answers and has no such handler is a different
+	// failure from one that cannot be reached at all, and only the error
+	// tells them apart.
+	_, err = client.Open(ctx, server.ID(), "/example/absent/1.0.0")
+	fmt.Println("refused:", errors.Is(err, transport.ErrNotHandled))
 
 	// Output:
 	// connected to 1 machine
 	// serving true
 	// hello
 	// path: lan true
+	// refused: true
 }
 
 func host() (*transport.Host, func()) {

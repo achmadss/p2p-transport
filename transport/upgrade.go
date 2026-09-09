@@ -45,7 +45,7 @@ var (
 	upgradeDial = config.Duration("RATATOSKR_UPGRADE_DIAL", 5*time.Second)
 )
 
-// watchForRelayed calls repair on every connection change.
+// watchForRelayed calls changed on every connection change.
 //
 // Disconnections count as much as connections. A direct connection that
 // dies leaves the relayed one beside it still carrying the session, and
@@ -53,10 +53,16 @@ var (
 // peer falls back to the relay and stays there.
 func (t *Host) watchForRelayed() {
 	t.h.Network().Notify(&network.NotifyBundle{
-		ConnectedF:    func(_ network.Network, c network.Conn) { t.repair(c.RemotePeer()) },
-		DisconnectedF: func(_ network.Network, c network.Conn) { t.repair(c.RemotePeer()) },
+		ConnectedF:    func(_ network.Network, c network.Conn) { t.changed(c.RemotePeer()) },
+		DisconnectedF: func(_ network.Network, c network.Conn) { t.changed(c.RemotePeer()) },
 	})
 }
+
+// changed puts a peer back on the best path it can reach and tells
+// everyone watching it where it ended up. These are the same event seen
+// twice — repair reads the path it will act on, so publishing what it
+// returns costs no second look at the connections.
+func (t *Host) changed(id peer.ID) { t.publish(id, t.repair(id)) }
 
 // repair puts a peer back on the best path it can reach, and returns the
 // one it found it on. It reads the best live path rather than the

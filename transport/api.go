@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multistream"
 )
 
 // This file is the package's whole exported surface. Everything else is
@@ -90,7 +92,7 @@ func (t *Host) Connect(ctx context.Context, id PeerID, addrs []string) error {
 		info.Addrs = t.circuits
 	}
 	if err := t.h.Connect(ctx, info); err != nil {
-		return fmt.Errorf("connect to %s: %w", id.Short(), err)
+		return fmt.Errorf("%w: connect to %s: %w", ErrUnreachable, id.Short(), err)
 	}
 	return nil
 }
@@ -98,9 +100,10 @@ func (t *Host) Connect(ctx context.Context, id PeerID, addrs []string) error {
 // Open starts a stream to a machine, dialling first if there is no
 // connection yet. It takes the best path available at that moment.
 //
-// A stream already open stays on the path it was born on. Bulk transfers
-// should therefore check Path as they go, and when a better one appears,
-// finish the current stream and send the rest on a new one.
+// Failure is either ErrUnreachable or ErrNotHandled; test with
+// errors.Is. A stream already open stays on the path it was born on, so
+// a bulk transfer follows Watch, and when a better path arrives finishes
+// the current stream and sends the rest on a new one.
 func (t *Host) Open(ctx context.Context, id PeerID, proto string) (Stream, error) {
 	pid, err := decode(id)
 	if err != nil {
@@ -108,7 +111,7 @@ func (t *Host) Open(ctx context.Context, id PeerID, proto string) (Stream, error
 	}
 	s, err := t.openStream(ctx, pid, protocol.ID(proto))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open %s to %s: %w", proto, id.Short(), err)
 	}
 	return stream{s}, nil
 }
@@ -121,6 +124,29 @@ func (t *Host) PathTo(id PeerID) Path {
 		return PathUnknown
 	}
 	return t.pathTo(pid)
+}
+
+// Watch reports the path to a machine, now and on every change, until
+// cancel is called or the host closes — at which point the channel
+// closes, so ranging over it ends on its own.
+//
+// The current path arrives before Watch returns, so there is nothing to
+// read separately before waiting. The channel holds one value: a reader
+// that falls behind is given where the machine is now rather than every
+// rung it passed. An id that is not a machine id watches nothing and its
+// channel is closed already.
+//
+// This is what a bulk transfer waits on. When the path that arrives
+// beats the one the current stream is on, finish that stream and send
+// the rest on a new one.
+func (t *Host) Watch(id PeerID) (<-chan Path, func()) {
+	pid, err := decode(id)
+	if err != nil {
+		dead := make(chan Path)
+		close(dead)
+		return dead, func() {}
+	}
+	return t.watch(pid)
 }
 
 // OnLAN calls fn for every machine found on the local network, once for
@@ -182,8 +208,9 @@ func rank(p Path) int {
 // file needs no flow control of its own.
 //
 // A stream dies with the connection it was opened on and cannot be
-// moved. Reissuing what was in flight is the caller's, since only the
-// caller knows what a partial answer meant.
+// moved; when it does, Read and Write report ErrUnreachable. Reissuing
+// what was in flight is the caller's, since only the caller knows what a
+// partial answer meant.
 type Stream interface {
 	io.ReadWriteCloser
 
@@ -199,10 +226,55 @@ type Stream interface {
 	Path() Path
 }
 
+// The two ways a stream dies. Both are returned wrapped, with what
+// actually went wrong still in the chain for a person to read, so test
+// them with errors.Is.
+var (
+	// ErrUnreachable means the machine could not be reached: it is off,
+	// it moved, or no path to it can be opened right now. Retrying later,
+	// or waiting on Watch, is the answer.
+	ErrUnreachable = errors.New("machine unreachable")
+
+	// ErrNotHandled means the machine was reached and answered that it
+	// has no handler for that protocol name. Retrying will not change it.
+	ErrNotHandled = errors.New("protocol not handled")
+)
+
 type stream struct{ network.Stream }
 
 func (s stream) Peer() PeerID { return PeerID(s.Stream.Conn().RemotePeer().String()) }
 func (s stream) Path() Path   { return pathOfConn(s.Stream.Conn()) }
+
+func (s stream) Read(p []byte) (int, error) {
+	n, err := s.Stream.Read(p)
+	return n, died(err)
+}
+
+func (s stream) Write(p []byte) (int, error) {
+	n, err := s.Stream.Write(p)
+	return n, died(err)
+}
+
+// died tags a failure on a stream that was already open. A stream dies
+// with its connection and there is no other way to lose one here, so
+// there is one answer. io.EOF is left alone: it is the far end saying it
+// has finished sending, which is how a transfer normally ends.
+func died(err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrUnreachable, err)
+}
+
+// why tags a stream that never opened with which of the two it was. The
+// far end refusing a protocol name is the only failure that says
+// anything about the machine other than that it could not be used.
+func why(err error) error {
+	if errors.Is(err, multistream.ErrNotSupported[protocol.ID]{}) {
+		return fmt.Errorf("%w: %w", ErrNotHandled, err)
+	}
+	return fmt.Errorf("%w: %w", ErrUnreachable, err)
+}
 
 // decode parses an id, refusing anything that is not one.
 func decode(id PeerID) (peer.ID, error) {

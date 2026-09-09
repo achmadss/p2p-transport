@@ -75,6 +75,10 @@ type Host struct {
 	// connection event does not start a second loop.
 	working sync.Map // peer.ID -> struct{}
 
+	// watchers are the open Watch calls, by the peer each one follows.
+	watchMu  sync.Mutex
+	watchers map[peer.ID][]*watcher
+
 	// circuits are the configured relays as dialable addresses. Empty on
 	// a machine with no relay, which then fails to reach an unreachable
 	// peer rather than hanging.
@@ -462,7 +466,7 @@ func directOnly(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 func (t *Host) openStream(ctx context.Context, id peer.ID, p protocol.ID) (network.Stream, error) {
 	s, err := t.h.NewStream(network.WithAllowLimitedConn(ctx, "ratatoskr"), id, p)
 	if err != nil {
-		return nil, fmt.Errorf("open stream: %w", err)
+		return nil, why(err)
 	}
 	return s, nil
 }
@@ -492,6 +496,7 @@ func (t *Host) Close() error {
 		if t.lan != nil {
 			t.lan.Close()
 		}
+		t.closeWatchers()
 	})
 	return err
 }

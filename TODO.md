@@ -77,14 +77,54 @@ reaching it from the harness would have meant exposing the host to do
 it; and the protocol ids heimdall shares are `internal/wire`, because a
 wire constant written twice is one that will one day differ.
 
-## Step 5 — Path changes are pushed, not polled
+## Step 5 — Path changes are pushed, not polled ✅ 9 Sep 2026
 
-- [ ] `Watch(id) (<-chan Path, func())`, off the hooks `repair` uses
-- [ ] `ratatoskr bench` uses it; the four-megabyte poll is deleted
-- [ ] A dead stream is reported clearly enough to tell "peer gone" from
+- [x] `Watch(id) (<-chan Path, func())`, off the hooks `repair` uses
+- [x] `ratatoskr bench` uses it; the four-megabyte poll is deleted
+- [x] A dead stream is reported clearly enough to tell "peer gone" from
       "request refused"
 
 **Check:** a transfer moves within a second of a better path landing.
+
+`transport/watch.go` hangs off the notifee `repair` already runs on, so
+no goroutine and no timer were added: the events that change a path are
+exactly the connect and disconnect the transport was watching anyway.
+`changed` is the one place the two meet — it repairs the peer and
+publishes the path repair read, so publishing costs no second look at the
+connections.
+
+The order inside `watch` is register, then read the path, and it is not
+tidiness: reading first leaves a window in which a connection opens and
+is published to a watcher not yet in the map, and the caller then holds a
+stale path until the next change. The channel is seeded with `unknown`
+and the real path goes through `publish` like any other.
+
+The channel buffers one path and a stale one is dropped before a new one
+is written. That is not a shortcut: the writer is libp2p's own connection
+hook, which must never block on an application that has stopped reading,
+and a reader that fell behind wants where the machine is now rather than
+the sequence it took to get there. The current path is delivered before
+`Watch` returns, so nothing is missed between asking and listening.
+
+`bench` no longer holds a path poll. `moveCheck`'s four megabytes was a
+fifth of a second on the local network and twenty seconds on the relay —
+the slow path being the one that noticed late. `writeChunk` is 512 KB and
+is now only how long a write can keep the transfer from reading an answer
+that has already arrived: five milliseconds on the local network, a
+seventh of a second on the slowest relay measured. `watchUpgrade` lost
+its 250 ms ticker for a blocking receive, and `zeros` went with the
+`io.CopyN` it fed.
+
+`ErrUnreachable` and `ErrNotHandled` are the third box. Both failures
+arrive as a failure to open a stream, and only the error tells a caller
+whether to wait on `Watch` and retry or to stop. `Read` and `Write` tag a
+stream that died mid-transfer the same way, leaving `io.EOF` alone, since
+a completed transfer ends by reading one.
+
+**Not measured yet.** The check wants a transfer moving within a second
+of a better path landing, on two machines. What is proven here is that
+the change is pushed and that the transfer acts on the push — the
+timing on a real pair is a `bench` run for the owner to make.
 
 ## Step 6 — Survival
 

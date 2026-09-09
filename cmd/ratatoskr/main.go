@@ -447,13 +447,12 @@ func size(args []string) int64 {
 	return int64(config.Int("RATATOSKR_BENCH_MB", 100))
 }
 
-// moveCheck is how often a running transfer asks whether a better path
-// has opened. The check reads live connections and costs nothing, so
-// this is only the granularity of the move. Four megabytes is a fifth of
-// a second on a local network and twenty seconds on a slow relay, which
-// is the right way round: the slower the path being escaped, the more
-// there is left to move.
-const moveCheck = 4 << 20
+// writeChunk is how much goes down the stream between two looks at the
+// path. Watch does the waiting, so this is only how long a write can
+// keep the transfer from noticing an answer that has already arrived:
+// five milliseconds on a local network, a seventh of a second on the
+// slowest relay measured.
+const writeChunk = 512 << 10
 
 // bench measures throughput to a machine, and when the transfer starts
 // out relayed, how long a direct path takes to open and what it then
@@ -478,8 +477,14 @@ func bench(want, path string, mb int64) error {
 	first := s.Path()
 	fmt.Printf("connected to %s over %s\n", peerID.Short(), first)
 
+	// One watch for the whole run: the transfer moves on what it
+	// delivers, and the wait afterwards is the same channel with nothing
+	// left to send down it.
+	paths, stop := h.Watch(peerID)
+	defer stop()
+
 	total := mb << 20
-	if err := transfer(ctx, h, s, peerID, mb, total); err != nil {
+	if err := transfer(ctx, h, s, peerID, paths, mb, total); err != nil {
 		return err
 	}
 	if first != transport.PathRelay {
@@ -496,7 +501,7 @@ func bench(want, path string, mb int64) error {
 	// already find the better path itself.
 	upgraded := h.PathTo(peerID)
 	if upgraded == transport.PathRelay {
-		upgraded = watchUpgrade(h, peerID)
+		upgraded = watchUpgrade(paths)
 	}
 	if upgraded == transport.PathRelay || upgraded == transport.PathUnknown {
 		return nil
@@ -507,27 +512,32 @@ func bench(want, path string, mb int64) error {
 	}
 	defer s2.Close()
 	fmt.Printf("second pass, all of it over %s\n", s2.Path())
-	return transfer(ctx, h, s2, peerID, mb, total)
+	return transfer(ctx, h, s2, peerID, paths, mb, total)
 }
 
 // transfer sends the bytes and reports the rate the far end confirms,
 // moving onto a better path if one opens while it is still sending.
 //
 // Nothing migrates: a stream is bound to the connection it was opened
-// on. What moves is the transfer. Every moveCheck bytes it asks for the
-// best path now, and when that beats the one it is on it finishes the
-// current stream, opens a new one on the better connection, and sends
-// the rest there. This is the recipe any bulk caller follows, and an
-// application that reads in ranges gets it for free.
-func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id transport.PeerID, mb, total int64) error {
+// on. What moves is the transfer. Every writeChunk bytes it reads
+// whatever Watch has delivered, and when that beats the path it is on it
+// finishes the current stream, opens a new one on the better connection,
+// and sends the rest there. This is the recipe any bulk caller follows,
+// and an application that reads in ranges gets it for free.
+func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id transport.PeerID, paths <-chan transport.Path, mb, total int64) error {
 	start := time.Now()
 	path := s.Path()
+	best := path
 	used := []string{string(path)}
 	sentOnStream := int64(0)
 
+	// Nothing on the path compresses, so the content does not matter and
+	// one buffer serves the whole run.
+	buf := make([]byte, writeChunk)
+
 	for sent := int64(0); sent < total; {
-		n := min(int64(moveCheck), total-sent)
-		if _, err := io.CopyN(s, zeros{}, n); err != nil {
+		n := min(int64(len(buf)), total-sent)
+		if _, err := s.Write(buf[:n]); err != nil {
 			return fmt.Errorf("send: %w", err)
 		}
 		sent += n
@@ -536,7 +546,16 @@ func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id tra
 			break
 		}
 
-		best := h.PathTo(id)
+		// Taken rather than waited for: the transfer has bytes to send
+		// either way, and the channel holds the latest path, so an empty
+		// one means nothing has changed since the last look.
+		select {
+		case p, ok := <-paths:
+			if ok {
+				best = p
+			}
+		default:
+		}
 		if !best.BetterThan(path) {
 			continue
 		}
@@ -552,6 +571,11 @@ func transfer(ctx context.Context, h *transport.Host, s transport.Stream, id tra
 		}
 		s, sentOnStream = next, 0
 		path = s.Path()
+		// The move is spent, whether or not it reached the path that
+		// prompted it. Without this a stream that opens on a worse path
+		// than the one just reported moves again every chunk, and a real
+		// improvement arrives as its own event anyway.
+		best = path
 		fmt.Printf("moved from %s to %s after %s\n", used[len(used)-1], path, human(sent))
 		used = append(used, string(path))
 	}
@@ -593,16 +617,14 @@ func confirm(s transport.Stream, want int64) error {
 	return nil
 }
 
-// watchUpgrade waits to see whether a relayed connection is replaced by
-// a direct one, and how long that takes. It only watches: the transport
-// keeps trying for as long as the machine stays relayed, measured or
-// not, and a path that never opens is as much a result as one that does.
-func watchUpgrade(h *transport.Host, id transport.PeerID) transport.Path {
+// watchUpgrade waits for a relayed connection to be replaced by a
+// direct one, and reports how long that took. It only watches: the
+// transport keeps trying for as long as the machine stays relayed,
+// measured or not, and a path that never opens is as much a result as
+// one that does.
+func watchUpgrade(paths <-chan transport.Path) transport.Path {
 	start := time.Now()
 	deadline := time.After(punchWindow)
-	tick := time.NewTicker(250 * time.Millisecond)
-	defer tick.Stop()
-
 	for {
 		select {
 		case <-deadline:
@@ -611,8 +633,11 @@ func watchUpgrade(h *transport.Host, id transport.PeerID) transport.Path {
 			// for as long as the session lasts.
 			fmt.Printf("still relayed after %s; the transfer worked, the direct path has not opened yet\n", punchWindow)
 			return transport.PathRelay
-		case <-tick.C:
-			if p := h.PathTo(id); p != transport.PathRelay && p != transport.PathUnknown {
+		case p, ok := <-paths:
+			if !ok {
+				return transport.PathUnknown // the host closed
+			}
+			if p != transport.PathRelay && p != transport.PathUnknown {
 				fmt.Printf("upgraded to %s after %s\n", p, time.Since(start).Round(time.Millisecond))
 				return p
 			}
@@ -632,9 +657,3 @@ func human(n int64) string {
 	}
 	return fmt.Sprintf("%d bytes", n)
 }
-
-// zeros is an endless reader. Nothing on the path compresses, so the
-// content of the bytes does not matter.
-type zeros struct{}
-
-func (zeros) Read(p []byte) (int, error) { return len(p), nil }
