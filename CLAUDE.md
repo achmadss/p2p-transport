@@ -253,6 +253,13 @@ every private address it is told over a public connection, and a
 circuit through a relay on a VPS is a public connection, so two
 machines on one LAN that meet over heimdall are never told each other's
 LAN address by libp2p. `askAddrs` asks the peer directly each tick.
+Measured on 9 Sep 2026: a relayed pair on one LAN moved to the LAN in
+10 seconds and ran at 107.7 MB/s.
+
+`lan` and `direct` are both direct connections and the difference is
+where: `lan` is a private address on this network, `direct` is a public
+one across the Internet. Never print the word "direct" to mean "not
+relayed" — one of the three paths is called that.
 
 A stream, though, never moves: it is bound to the connection it was
 opened on, and neither libp2p nor QUIC offers a migration that would

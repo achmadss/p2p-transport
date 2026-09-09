@@ -902,3 +902,47 @@ reads are already one request per range, so a transfer that survives a
 path change is what steps 4 and 5 get without asking. What this adds is
 the measurement, now, on the diagnostic that already exists.
 
+
+### Measured 9 Sep 2026: the LAN rung works
+
+Two machines on one LAN, mDNS off, meeting over heimdall on purpose:
+
+```
+connected to HtZh-LKTg over relay
+moved from relay to lan after 12 MB
+connection to HtZh-LKTg left the relay for lan after 10s
+3000 MB over lan in 33.304s = 90.1 MB/s, averaged across relay then lan
+second pass, all of it over lan
+3000 MB over lan in 27.843s = 107.7 MB/s
+```
+
+So the addr exchange found the LAN address identify had thrown away,
+the ladder picked the lowest rung rather than hairpinning out to the
+Internet, and a transfer already running moved itself across at 12 MB
+of 3000 without being restarted. 107.7 MB/s is a gigabit line saturated
+either way, and the mixed first pass averaging 90.1 tells you how
+little of it went the slow way.
+
+Three log lines were wrong and are fixed here, because two of them
+would have misled the next reading:
+
+- `went direct after 10s` said "direct" meaning "not relayed", but
+  `direct` is also the name of the path *through the Internet*. A LAN
+  upgrade announced itself as a trip out and back. It names the path
+  now.
+- `upgraded to lan after 251ms` was not a measurement. `watchUpgrade`
+  starts after the first pass returns, the path was already `lan` by
+  then, and 251 ms is its 250 ms ticker firing once. That is also the
+  answer to the 251 ms that appeared in an earlier run and read as a
+  punch time: it was never one. The watch is now skipped when the
+  transfer has already moved.
+- `3000 MB over lan ... = 90.1 MB/s` named the path it ended on for a
+  number that averaged two. It lists them.
+
+And `PathTo` returned the first non-relay connection it found rather
+than the best, which after an upgrade leaves two. It uses
+`Path.BetterThan` now, so a machine holding both a LAN and an Internet
+connection reports the LAN.
+
+What is still owed is the same test between networks: a hotspot and a
+home line, where the carrier renumbers and nothing has ever landed.

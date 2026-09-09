@@ -458,14 +458,19 @@ func bench(want, path string, mb int64) error {
 		return nil
 	}
 
-	// A stream lives on the connection it was opened on, so the transfer
-	// above stayed on the relay even if the punch landed halfway through
-	// it. The number that answers "is the relay the normal data path"
-	// therefore comes from a second stream, opened after the upgrade —
-	// which is exactly what the File API will do for the next request on
-	// a session that has been up a while.
-	upgraded := watchUpgrade(h, peerID)
-	if upgraded != transport.PathDirect && upgraded != transport.PathLAN {
+	// The pass above began on the relay, so its rate is an average of
+	// however many paths it used. The number that answers "is the relay
+	// the normal data path" is a whole transfer on the new one, which is
+	// also what the File API will do for the next request on a session
+	// that has been up a while.
+	//
+	// There is only something to wait for if the transfer did not
+	// already find the better path itself.
+	upgraded := h.PathTo(peerID)
+	if upgraded == transport.PathRelay {
+		upgraded = watchUpgrade(h, peerID)
+	}
+	if upgraded == transport.PathRelay || upgraded == transport.PathUnknown {
 		return nil
 	}
 	s2, err := h.Open(ctx, peerID, transport.BenchProto)
@@ -474,7 +479,7 @@ func bench(want, path string, mb int64) error {
 	}
 	defer s2.Close()
 	again := transport.Describe(s2.Conn()).Path
-	fmt.Printf("second pass over %s\n", again)
+	fmt.Printf("second pass, all of it over %s\n", again)
 	return transfer(ctx, h, s2, peerID, mb, total)
 }
 
@@ -499,7 +504,7 @@ func bench(want, path string, mb int64) error {
 func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.ID, mb, total int64) error {
 	start := time.Now()
 	path := transport.Describe(s.Conn()).Path
-	moved := 0
+	used := []string{string(path)}
 	sentOnStream := int64(0)
 
 	for sent := int64(0); sent < total; {
@@ -528,23 +533,23 @@ func transfer(ctx context.Context, h *transport.Host, s network.Stream, id peer.
 			return fmt.Errorf("moving from %s to %s after %s: %w", path, best, human(sent), err)
 		}
 		s, sentOnStream = next, 0
-		fmt.Printf("moved from %s to %s after %s\n", path, transport.Describe(s.Conn()).Path, human(sent))
-		path, moved = transport.Describe(s.Conn()).Path, moved+1
+		path = transport.Describe(s.Conn()).Path
+		fmt.Printf("moved from %s to %s after %s\n", used[len(used)-1], path, human(sent))
+		used = append(used, string(path))
 	}
 	if err := confirm(s, sentOnStream); err != nil {
 		return err
 	}
 	elapsed := time.Since(start)
 
-	// A run that moved reports an average of the paths it used and not
-	// any one of them. The number worth reading there is the move line:
-	// where the change happened, and how much was still to send.
-	where := string(path)
-	if moved > 0 {
-		where = fmt.Sprintf("%s, after %d move(s)", path, moved)
+	// A run that moved is an average of the paths it used and not the
+	// speed of any one of them, so it says which ones went into it
+	// rather than naming the one it happened to end on.
+	rate := fmt.Sprintf("%.1f MB/s", float64(total)/(1<<20)/elapsed.Seconds())
+	if len(used) > 1 {
+		rate += fmt.Sprintf(", averaged across %s", strings.Join(used, " then "))
 	}
-	fmt.Printf("%d MB over %s in %s = %.1f MB/s\n", mb, where, elapsed.Round(time.Millisecond),
-		float64(total)/(1<<20)/elapsed.Seconds())
+	fmt.Printf("%d MB over %s in %s = %s\n", mb, used[len(used)-1], elapsed.Round(time.Millisecond), rate)
 	return nil
 }
 
@@ -592,7 +597,7 @@ func watchUpgrade(h *transport.Host, id peer.ID) transport.Path {
 			fmt.Printf("still relayed after %s; the transfer worked, the direct path has not opened yet\n", punchWindow)
 			return transport.PathRelay
 		case <-tick.C:
-			if p := h.PathTo(id); p == transport.PathDirect || p == transport.PathLAN {
+			if p := h.PathTo(id); p != transport.PathRelay && p != transport.PathUnknown {
 				fmt.Printf("upgraded to %s after %s\n", p, time.Since(start).Round(time.Millisecond))
 				return p
 			}

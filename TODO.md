@@ -108,20 +108,24 @@ choice. Do it before anything depends on the answer.
       the decision is written down and built 8 Sep 2026
 - [x] Publish a *set* of independently measured addresses, refreshed
       every 27 seconds, rather than one address measured at startup
-- [ ] Retry the punch for as long as a peer is relayed, from both ends.
-      Built; unmeasured on the hotspot, which is the only test that
-      has ever been able to fail
-- [ ] Test: two machines on one LAN that meet over the relay upgrade to
-      the LAN, not to the Internet. `/ratatoskr/addrs/1.0.0` exists for
+- [x] Retry the punch for as long as a peer is relayed, from both ends.
+      Landed the LAN upgrade in 10s on 9 Sep 2026; still unmeasured on
+      the hotspot, which is the only test that has ever been able to
+      fail
+- [x] Test: two machines on one LAN that meet over the relay upgrade to
+      the LAN, not to the Internet. Passed 9 Sep 2026: relay at 0 MB,
+      moved to `lan` at 12 MB of 3000, 90.1 MB/s averaged across the
+      two and 107.7 MB/s on the clean second pass. `/ratatoskr/addrs/1.0.0` exists for
       this: identify drops every private address it is told over a
       public connection, and a circuit through heimdall is a public
       connection, so libp2p alone never tells either machine the
       other's LAN address. Run it with mDNS off — discovery and path
       are different questions, and mDNS answers the first one only.
       Built 9 Sep 2026, unmeasured.
-- [ ] Test: a transfer already running moves itself off the relay when
-      the punch lands part way through it, and heimdall's counters stop
-      climbing there rather than at the end. Nothing migrates a stream,
+- [x] Test: a transfer already running moves itself off the relay when
+      the punch lands part way through it. Passed 9 Sep 2026 on the LAN
+      pair, at 12 MB of 3000. Still owed on the hotspot, and heimdall's
+      counters have not been read across a move. Nothing migrates a stream,
       in libp2p or in QUIC; checking `PathTo` every few MB and finishing
       the stream is the whole mechanism, and it is what ranged reads
       give the File API for free. Built 9 Sep 2026, unmeasured.

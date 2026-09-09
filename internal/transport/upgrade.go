@@ -88,13 +88,16 @@ func (t *Host) upgrade(id peer.ID) {
 			return
 		case <-tick.C:
 		}
-		switch t.PathTo(id) {
+		switch p := t.PathTo(id); p {
 		case PathDirect, PathLAN:
 			// Someone's dial landed — ours, theirs, or DCUtR's. Which
 			// one is not worth finding out; the path is measured from
-			// the connection either way.
-			fmt.Fprintf(os.Stderr, "connection to %s went direct after %s\n",
-				identity.Short(id.String()), time.Since(start).Round(time.Second))
+			// the connection either way. Print which path it is rather
+			// than the word "direct": "direct" is also the name of one
+			// of them, and a LAN upgrade announcing itself as direct
+			// reads as a trip out to the Internet and back.
+			fmt.Fprintf(os.Stderr, "connection to %s left the relay for %s after %s\n",
+				identity.Short(id.String()), p, time.Since(start).Round(time.Second))
 			return
 		case PathUnknown:
 			return // no connection at all any more

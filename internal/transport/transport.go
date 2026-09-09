@@ -579,17 +579,15 @@ func (t *Host) dial(ctx context.Context, info peer.AddrInfo, p protocol.ID) (net
 	return s, nil
 }
 
-// PathTo reports how this machine currently reaches a peer, across every
-// open connection. A relayed connection that DCUtR later upgrades leaves
-// a direct one here, which is how the upgrade is observed rather than
-// assumed.
+// PathTo reports the best way this machine currently reaches a peer,
+// across every open connection. An upgrade leaves the relayed
+// connection in place beside the new one, so the answer is the best of
+// them and not the first one found — which is how the upgrade is
+// observed rather than assumed.
 func (t *Host) PathTo(id peer.ID) Path {
 	best := PathUnknown
 	for _, c := range t.h.Network().ConnsToPeer(id) {
-		switch p := pathOfConn(c); p {
-		case PathLAN, PathDirect:
-			return p
-		case PathRelay:
+		if p := pathOfConn(c); p.BetterThan(best) {
 			best = p
 		}
 	}
