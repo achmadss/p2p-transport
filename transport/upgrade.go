@@ -84,14 +84,44 @@ func (t *Host) watchForRelayed() {
 // directly is not a reason to punch, a direct connection closing is not
 // a reason not to, and the last connection closing is a different
 // problem from a worse one being left behind.
+//
+// The walking is here rather than inside upgrade and restore, and one
+// goroutine does both directions, because holding them apart dropped
+// every handover between them. Each took the peer's slot for itself, so
+// the connection event that should have started the other half found
+// the slot taken and did nothing — and the loop that held it then
+// returned, because the state it was waiting for was the other half's.
+// A punch loop whose peer vanishes owes it a redial and a redial that
+// lands on the relay owes it a punch; both were a peer left on a rung
+// with nobody dialling for it.
 func (t *Host) repair(id peer.ID) Path {
 	p := t.pathTo(id)
-	switch p {
-	case PathRelay:
-		go t.upgrade(id) // something better may still be opened
-	case PathUnknown:
-		go t.restore(id) // nothing is left; climb back down
+	if p != PathRelay && p != PathUnknown {
+		return p
 	}
+	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
+		return p
+	}
+	go func() {
+		defer t.working.Delete(id)
+		for {
+			select {
+			case <-t.done:
+				return
+			default:
+			}
+			switch t.pathTo(id) {
+			case PathRelay:
+				t.upgrade(id) // something better may still open
+			case PathUnknown:
+				if !t.restore(id) {
+					return // gone for good, or the host is closing
+				}
+			default:
+				return // direct or on the LAN: nothing to repair
+			}
+		}
+	}()
 	return p
 }
 
@@ -101,10 +131,12 @@ func (t *Host) repair(id peer.ID) Path {
 // enough that a machine genuinely switched off is not dialled for the
 // life of the process. When it expires the peer is simply gone, and the
 // next request from above dials it afresh.
-const restoreFor = 30 * time.Second
+var restoreFor = 30 * time.Second
 
 // restore climbs back down the ladder when every path to a peer has
-// gone.
+// gone. It reports whether the peer came back, so that repair can start
+// the climb again — landing on the relay is not the end of the ladder,
+// it is the bottom of it.
 //
 // The rungs are tried in order and the order is the point: everything
 // direct that is known, raced in one dial so the LAN wins on latency
@@ -116,29 +148,24 @@ const restoreFor = 30 * time.Second
 // It cannot ask the peer where it lives, because AddrsProto needs a
 // connection and there is none. What it has is the peerstore, which
 // identify filled while the connection was up and which outlives it.
-func (t *Host) restore(id peer.ID) {
-	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
-		return
-	}
-	defer t.working.Delete(id)
-
+func (t *Host) restore(id peer.ID) bool {
 	tick := time.NewTicker(upgradeEvery)
 	defer tick.Stop()
 	deadline := time.After(restoreFor)
 	for {
 		if t.pathTo(id) != PathUnknown {
-			return // it came back, by our dial or by theirs
+			return true // it came back, by our dial or by theirs
 		}
 		t.redial(id)
 		select {
 		case <-t.done:
-			return
+			return false
 		case <-deadline:
 			if os.Getenv("RATATOSKR_DIAG") != "" {
 				fmt.Fprintf(os.Stderr, "gave up reaching %s after %s\n",
 					identity.Short(id.String()), restoreFor)
 			}
-			return
+			return false
 		case <-tick.C:
 		}
 	}
@@ -170,13 +197,9 @@ func (t *Host) redial(id peer.ID) {
 }
 
 // upgrade re-dials a relayed peer directly until it answers, the peer
-// goes away, or the host closes.
+// goes away, or the host closes. It returns to repair, which decides
+// what the state it stopped on is owed.
 func (t *Host) upgrade(id peer.ID) {
-	if _, running := t.working.LoadOrStore(id, struct{}{}); running {
-		return
-	}
-	defer t.working.Delete(id)
-
 	tick := time.NewTicker(upgradeEvery)
 	defer tick.Stop()
 	start := time.Now()
@@ -198,7 +221,7 @@ func (t *Host) upgrade(id peer.ID) {
 				identity.Short(id.String()), p, time.Since(start).Round(time.Second))
 			return
 		case PathUnknown:
-			return // no connection at all any more
+			return // nothing left to upgrade; repair climbs back down
 		}
 		t.dialDirect(id)
 	}

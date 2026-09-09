@@ -150,7 +150,10 @@ func New(cfg Config) (*Host, error) {
 	var observed, measured atomic.Value
 	opts = append(opts, libp2p.AddrsFactory(func(as []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 		out := append(as[:0:0], as...)
-		for _, extra := range [][]multiaddr.Multiaddr{known(&observed), known(&measured)} {
+		for _, store := range []*atomic.Value{&observed, &measured} {
+			// Nothing is published before the first answer lands, which
+			// is the honest state rather than a failure.
+			extra, _ := store.Load().([]multiaddr.Multiaddr)
 			for _, a := range extra {
 				if !has(out, a) {
 					out = append(out, a)
@@ -208,7 +211,11 @@ func New(cfg Config) (*Host, error) {
 	if !cfg.NoLAN {
 		lan, err := discovery.Start(h, t.found)
 		if err != nil {
-			h.Close()
+			// t.Close, not h.Close: the refresher and the relay dialler
+			// are already running and watch t.done, so closing only the
+			// host leaves them asking reflectors for the life of the
+			// process.
+			t.Close()
 			return nil, err
 		}
 		t.lan = lan
@@ -226,13 +233,6 @@ func (t *Host) found(info peer.AddrInfo) {
 	for _, fn := range fns {
 		fn(PeerID(info.ID.String()), addrs)
 	}
-}
-
-// known reads one of the address stores. Nothing is published before
-// the first answer lands, which is the honest state and not a failure.
-func known(v *atomic.Value) []multiaddr.Multiaddr {
-	as, _ := v.Load().([]multiaddr.Multiaddr)
-	return as
 }
 
 // refreshMeasured keeps this machine's public address set younger than
@@ -538,13 +538,18 @@ func (t *Host) pathTo(id peer.ID) Path {
 
 func pathOfConn(c network.Conn) Path { return pathOf(c.RemoteMultiaddr()) }
 
-// Close stops everything this host started, in the order it started it.
+// Close stops everything this host started. Calling it twice is safe,
+// which matters because an error path can close a host that a defer
+// will close again.
 func (t *Host) Close() error {
-	t.closeOnce.Do(func() { close(t.done) })
-	if t.lan != nil {
-		t.lan.Close()
-	}
-	return t.h.Close()
+	err := t.h.Close()
+	t.closeOnce.Do(func() {
+		close(t.done)
+		if t.lan != nil {
+			t.lan.Close()
+		}
+	})
+	return err
 }
 
 func transportOf(a multiaddr.Multiaddr) string {

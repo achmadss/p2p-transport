@@ -145,6 +145,31 @@ func TestPathLadder(t *testing.T) {
 // back down. The decision has to come from the best path rather than
 // from the connection that fired the event, because the same notifee
 // now runs on connect and disconnect both.
+// TestRepairGivesUpOnAPeerThatIsGone pins the one way the ladder loop
+// can fail to end. It walks both directions now, so an ending it does
+// not recognise is not a stopped goroutine but a spin: restore gives up
+// after restoreFor, the path is still unknown, and a loop that read
+// that as "try again" would dial forever and never release the peer.
+func TestRepairGivesUpOnAPeerThatIsGone(t *testing.T) {
+	defer swap(&upgradeEvery, 10*time.Millisecond)()
+	defer swap(&restoreFor, 100*time.Millisecond)()
+
+	h := &Host{h: newHost(t), done: make(chan struct{})}
+	defer h.Close()
+
+	gone := newHost(t).ID()
+	h.repair(gone)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, held := h.working.Load(gone); !held {
+			return // the loop ended and let the peer go
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the ladder loop never released a peer it had given up on")
+}
+
 func TestRepairReadsTheRungNotTheEvent(t *testing.T) {
 	a, b := newHost(t), newHost(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
