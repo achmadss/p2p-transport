@@ -37,7 +37,8 @@ func main() {
 		fmt.Print(`usage: bifrost
 
 environment (empty means the default):
-  RATATOSKR_CONFIG_DIR  where identity.key and subjects.json live
+  RATATOSKR_CONFIG_DIR  where identity.key, subjects.json and
+                        usage.json live
   BIFROST_PORT          listen port for relays and machines, UDP and
                         TCP                                    (4002)
   BIFROST_ANNOUNCE      comma-separated public multiaddrs to advertise
@@ -58,7 +59,11 @@ environment (empty means the default):
 admin API, plain HTTP and JSON, rates in bytes per second:
   PUT    /v1/subjects/{id}          {"min": 2000000, "max": 50000000}
   PUT    /v1/subjects/{id}/devices  {"peer_ids": ["12D3Koo..."]}
+  GET    /v1/subjects/{id}/usage -> {"bytes": 1234, "since": "..."}
   DELETE /v1/subjects/{id}
+
+Usage only ever grows. Read it twice and subtract for a period, and
+watch since: it changes when the counting started again.
 
 It has no authentication. Keep it on loopback, or behind whatever
 already guards the application's own admin traffic.
@@ -77,6 +82,10 @@ func run() error {
 		return err
 	}
 	st, err := openStore("")
+	if err != nil {
+		return err
+	}
+	usage, err := openMeter("")
 	if err != nil {
 		return err
 	}
@@ -110,13 +119,21 @@ func run() error {
 
 	done := make(chan struct{})
 	defer close(done)
-	f := newFleet(st, knobsFromEnv())
+	f := newFleet(st, usage, knobsFromEnv())
 	f.serve(h, done)
+	go usage.serve(done)
+	// The last flush is here rather than in serve: a goroutine woken by
+	// a closing channel races the process leaving.
+	defer func() {
+		if err := usage.flush(); err != nil {
+			fmt.Fprintln(os.Stderr, "usage not written:", err)
+		}
+	}()
 
 	// The admin API is the only part an operator can get wrong in a way
 	// that matters, so its address is printed whether it is loopback or
 	// not.
-	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(st,
+	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(st, usage,
 		config.Bytes("BIFROST_SUBJECT_MIN", defaultSubjectMin),
 		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax),
 		f.divide)}

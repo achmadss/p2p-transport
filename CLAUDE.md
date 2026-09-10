@@ -56,12 +56,14 @@ only. `git log` has the original wording; do not re-add any of it here.
 
 Steps 0 to 5 are done. Step 6 is half done: the two boxes that are code
 are ticked, and the three that need a person moving a cable are not. Step
-7 has started: `FLEET.md` §9 steps 1 and 2 are built — relays register,
-machines lease, a machine the coordinator did not place is refused, and
-each subject's bytes pass through one bucket that a rate change reaches
-mid-transfer — and none of it has carried a byte outside a test. The
-allowance loop, metering and scaling are designed and not built. `TODO.md` has the
-per-step detail, including why each decision went the way it did.
+7 has started: `FLEET.md` §9 steps 1 to 4 are built — relays register,
+machines lease, a machine the coordinator did not place is refused, each
+subject's bytes pass through one bucket that a rate change reaches
+mid-transfer, one rate is divided between the relays carrying it and
+re-divided every second, and what every subject moved is counted and
+survives a restart — and none of it has carried a byte outside a test.
+Autoscaling is designed and not built. `TODO.md` has the per-step
+detail, including why each decision went the way it did.
 
 Numbers, because a claim without one is not allowed here. All taken 9 Sep
 2026 on the owner's machines:
@@ -102,7 +104,8 @@ application does not say, `HEIMDALL_BANDWIDTH` is what a relay claims
 it can forward **per direction** — a relayed byte crosses the machine
 twice, so it is not the provider's headline number — and
 `HEIMDALL_REPORT_EVERY` is how often a relay tells the coordinator what
-each subject moved, which is the clock the allowance loop runs on.
+each subject moved, which is the clock the allowance loop runs on and
+the clock the meter counts on.
 
 ## Commands
 
@@ -290,6 +293,16 @@ the subject's rate max-min fair, and pushes back only the shares that
 moved. A relay it has not heard from for three periods falls back to a
 floor, so a machine that stops transferring does not strand the rate on
 its relay. `cmd/bifrost/allowance.go` is the whole of it.
+
+**Metering is those same reports added up.** There is no scrape and no
+second port on the relays: the numbers the allowance loop already needs
+are the numbers a bill needs, so `cmd/bifrost/usage.go` adds them to a
+counter per subject and `GET /v1/subjects/{id}/usage` reads it. The
+counter only grows and carries the time it started, because subtracting
+two readings is the only way to get a period out of it and the start
+time is the only way to tell a quiet period from a counter that went
+back to zero. It is written to `usage.json` on a thirty-second timer, so
+a crash costs at most that much counting.
 
 ## Traps
 

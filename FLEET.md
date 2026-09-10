@@ -370,6 +370,24 @@ most one scrape interval of counts with it. If billing needs better than
 that, the relay should checkpoint to bifrost on a short timer — but that
 is a decision to make when someone is actually billing, not now.
 
+**What was built is the rolling counter and not the scrape.** The
+relays already say what every subject moved, once a period, because §4.2
+cannot divide a rate without it; those numbers are the bill. A Prometheus
+endpoint would have been a second port, a second protocol and a second
+copy of the same count, arriving at an interval nobody chose — and the
+reason this section wanted a rolling counter in the first place was so
+`GET /v1/subjects/{id}/usage` could answer without a Prometheus query.
+The counter alone does that. Add the metrics endpoint when an operator
+wants a dashboard, which is a different need from a bill.
+
+The counter only grows, and the time it started travels with it, so an
+application that wants a month reads it twice and subtracts. That is the
+same shape a Prometheus counter has, and for the same reason: a gauge
+that resets cannot be distinguished from one that did not move. It is
+written to `usage.json` on a thirty-second timer and once more on the way
+out, which is the bargain above with a number on it — a coordinator that
+crashes loses at most thirty seconds of counting.
+
 ---
 
 ## 6. Scaling

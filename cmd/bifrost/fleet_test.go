@@ -14,11 +14,16 @@ import (
 // a temporary directory.
 func testFleet(t *testing.T) *fleet {
 	t.Helper()
-	st, err := openStore(t.TempDir())
+	dir := t.TempDir()
+	st, err := openStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newFleet(st, knobs{ttl: defaultTTL, headroom: defaultHeadroom, packTo: defaultPackTo})
+	m, err := openMeter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newFleet(st, m, knobs{ttl: defaultTTL, headroom: defaultHeadroom, packTo: defaultPackTo})
 }
 
 // join registers a relay that discards whatever is pushed at it.

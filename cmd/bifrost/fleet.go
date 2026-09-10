@@ -84,6 +84,7 @@ type placement struct {
 // restart costs one round of both rather than a restore.
 type fleet struct {
 	store *store
+	meter *meter
 	knobs knobs
 
 	mu     sync.Mutex
@@ -96,9 +97,10 @@ type fleet struct {
 	shares map[shareKey]*share
 }
 
-func newFleet(s *store, k knobs) *fleet {
+func newFleet(s *store, m *meter, k knobs) *fleet {
 	return &fleet{
 		store:  s,
+		meter:  m,
 		knobs:  k,
 		relays: map[peer.ID]*relayNode{},
 		placed: map[peer.ID]*placement{},

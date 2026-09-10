@@ -191,7 +191,7 @@ shapes.
 - [x] `bifrost`: relay registry, placement, leases and admission push
 - [x] Heimdall joins a fleet: registers, follows the pushed access list,
       and refuses everyone else
-- [ ] `bifrost`: metering — per-subject counters and the usage endpoint
+- [x] `bifrost`: metering — per-subject counters and the usage endpoint
 - [x] The shaper: one bucket per subject, no per-circuit limiter, and a
       rate change that reaches a transfer already running
 - [x] The allowance loop: demand reported per second, max-min allocated
@@ -236,9 +236,12 @@ nothing outside the local network can reach here.
 Two decisions in it are worth the sentence. The subject store is a JSON
 file rather than the SQLite `FLEET.md` §8 names, because at this step
 the durable state is a handful of subjects and their machines: the
-placements and the registry are rebuilt from what reconnects. It becomes
-SQLite when metering lands, since counters are the first state that
-cannot be rebuilt. And a relay that loses the coordinator keeps its
+placements and the registry are rebuilt from what reconnects. Metering
+has landed and it stayed a file: a counter is one integer and one
+timestamp per subject, written beside the subjects rather than in a
+database. SQLite when a whole-file rewrite costs more than it saves,
+which is a size this fleet is nowhere near. And a relay that loses the
+coordinator keeps its
 access list exactly as it was, so an outage stops new machines arriving
 and does not evict the ones already relaying.
 
@@ -267,10 +270,26 @@ delay is the whole point — it is the only evidence a subject would have
 taken more than it was given. That is the blocked-time signal the earlier
 note said was missing, and it is now there.
 
-What is still missing is the counters that survive a restart. The bytes
-are counted per subject and thrown away every period, which is what the
-loop needs and not what a bill needs; metering is the next box and it is
-where the subject store stops being a JSON file.
+Metering turned out to be an addition rather than a subsystem, and
+`FLEET.md` §5 now records why. That section has the relays exporting
+Prometheus metrics on a private port and bifrost scraping them, and none
+of that was built: the relays already say what every subject moved, once
+a period, because the allowance loop cannot divide a rate without it.
+Adding those numbers up is the meter. A scrape would have been a second
+port, a second protocol and a second copy of the same count, arriving at
+an interval nobody chose — and the reason §5 wanted a rolling counter at
+all was so `GET /v1/subjects/{id}/usage` could answer without a
+Prometheus query, which the counter alone does.
+
+The counter only grows and the time it started travels with it, because
+an application that wants a month reads it twice and subtracts, and the
+start time is the only way to tell a quiet month from a coordinator that
+lost the file. It is held in memory and written to `usage.json` every
+thirty seconds and once more on the way out, so a crash costs at most
+thirty seconds of counting — the same bargain §5 already makes for a
+relay that dies holding a period. Bytes are counted whether or not the
+coordinator still has a share for that subject, because a placement that
+expires mid-period does not make the last period of a transfer free.
 
 The shaper did not need the fork `FLEET.md` §4.5 called for, and that
 section now says why. Every byte a relay forwards arrives through one of
@@ -281,9 +300,9 @@ copy of somebody else's package. Reads are shaped and writes are not,
 which is not an omission: a forwarded byte is read from one leg and
 written to the other, so shaping reads charges it exactly once.
 
-What the fork would have given and this does not, yet, is the blocked
-time §4.2 runs on. It is the same wait, and measuring it is a line in
-`pay`; nothing reads it until metering exists, so it is not there.
+What the fork would have given, the blocked time §4.2 runs on, turned
+out to be a line in `pay` rather than anything the fork was needed for:
+it reserves and sleeps, and the sleep is the measurement.
 
 Every number the arithmetic turns on is an environment variable with a
 default: `BIFROST_HEADROOM` (0.70) and `BIFROST_PACK_TO` (0.85) decide

@@ -150,7 +150,7 @@ const (
 // changed is told when a subject's rates move, so its share of every
 // relay carrying it can be worked out again. Nil in a test that only
 // cares about the store.
-func admin(s *store, defMin, defMax int64, changed func(subject string)) http.Handler {
+func admin(s *store, m *meter, defMin, defMax int64, changed func(subject string)) http.Handler {
 	mux := http.NewServeMux()
 	if changed == nil {
 		changed = func(string) {}
@@ -210,13 +210,32 @@ func admin(s *store, defMin, defMax int64, changed func(subject string)) http.Ha
 		}
 	})
 
+	// What a subject has moved through the whole fleet, ever. The number
+	// only grows, so an application that wants a month reads it twice and
+	// subtracts; since says when the counting started, which is the only
+	// way to tell a quiet month from a coordinator that lost the file.
+	mux.HandleFunc("GET /v1/subjects/{id}/usage", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, _, ok := s.subject(id); !ok {
+			http.Error(w, errNoSubject.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(m.read(id))
+	})
+
 	mux.HandleFunc("DELETE /v1/subjects/{id}", func(w http.ResponseWriter, r *http.Request) {
-		switch err := s.remove(r.PathValue("id")); {
+		id := r.PathValue("id")
+		switch err := s.remove(id); {
 		case errors.Is(err, errNoSubject):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		case err != nil:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		default:
+			// The counter goes with the subject. Keeping it would grow
+			// the file for ever on a fleet whose subjects come and go,
+			// and whoever deleted this one could read the number first.
+			m.forget(id)
 			w.WriteHeader(http.StatusNoContent)
 		}
 	})

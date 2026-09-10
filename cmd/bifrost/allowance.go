@@ -156,6 +156,14 @@ func (f *fleet) report(id peer.ID, d wire.Demand) {
 	// here when bifrost is exposed to anything but its own relays.
 	until := time.Now().Add(3 * period)
 
+	// Counted before anything else, and counted even for a subject this
+	// coordinator no longer has a share for: bytes that crossed a relay
+	// crossed it, and a placement that expired mid-period does not make
+	// them free.
+	for _, r := range d.Reports {
+		f.meter.add(r.Subject, r.Used)
+	}
+
 	// A set, not a list: dividing is a scan of every share, and a relay
 	// naming one subject twice must not buy two of them.
 	touched := map[string]bool{}
