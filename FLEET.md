@@ -282,12 +282,36 @@ The byte pump is `relay.go`'s `relayLimited`/`relayUnlimited` calling
 the loop. There is no per-connection rate hook and no way to add one
 from outside the package.
 
-So: **vendor `circuitv2/relay` into `internal/relay` and add one hook** —
-a `Shaper` that, given `(src, dest)`, returns the subject's bucket, the
-relay's own ceiling, and a counter that records bytes passed and time
-spent blocked. Blocked time is the demand signal §4.2 runs on, so it
-comes out of the same forty lines. Open it upstream as `WithShaper` at
-the same time, so the fork has somewhere to go instead of rotting.
+An earlier draft of this section concluded: vendor `circuitv2/relay`
+into `internal/relay` and add a `Shaper` hook to `copyWithBuffer`. That
+was wrong, and the thing it missed is that the copy loop is not the only
+place the bytes can be caught.
+
+**Every byte a relay forwards arrives through one of two calls on the
+host it was built with**: the handler it registers for machines dialling
+in (`SetStreamHandler` on the hop protocol), and the stream it opens to
+the machine being dialled (`NewStream` on the stop protocol). `relay.New`
+takes a `host.Host`, which is an interface. So the hook is a host that
+embeds the real one and overrides those two methods, returning streams
+whose `Read` waits on the subject's bucket — twenty lines in
+`cmd/heimdall`, against a thousand-line fork to keep in step with
+upstream. Nothing else on the machine is shaped: the coordinator link
+and the address protocols run on the real host.
+
+Reads only, and that is what makes the accounting right. A forwarded
+byte is read from one leg and written to the other, so shaping every
+leg's reads charges each byte exactly once, in the direction it
+travelled. Waiting after the read rather than before is the only order
+available — how many bytes there are is not known until they have
+arrived — and it is enough: the wait holds the next read off, the flow
+control window fills behind it, and the sender stops. The blocked time
+§4.2 wants is the same wait, measured; it is not recorded yet because
+nothing reads it until §5.
+
+The buckets live in `internal/shape`, keyed by subject, with the relay's
+own ceiling under them. `x/time/rate` is the bucket, it was already in
+the module, and `SetLimit` on a live limiter is what makes a rate change
+reach a transfer already running.
 
 Rejected, and why:
 
@@ -299,7 +323,11 @@ Rejected, and why:
   one machine's worth of capacity, and packs badly. This was the earlier
   design and it is the thing this section replaces.
 - **`RelayLimit.Data` alone.** A monthly quota wearing a rate's clothes.
-  It cannot answer "10 MB/s".
+  It cannot answer "10 MB/s". It stays as a backstop under the shaper,
+  since a byte cap and a rate are not the same guard.
+- **Forking the relay.** See above. It shapes the same bytes and costs a
+  thousand lines of somebody else's code, kept in step by hand for as
+  long as this exists.
 
 ## 5. Metering
 
@@ -597,10 +625,10 @@ refreshed circuit set instead of the frozen one.
 
 **`cmd/heimdall/main.go`** — register with bifrost and heartbeat; accept
 `ADMIT`, `SETLIMIT`, `ALLOWANCE`, `MOVE` and `DRAIN`; back `ACLFilter`
-with the pushed table, failing closed; replace
-`relay.DefaultResources()`'s single global limit with the vendored hop
-and its shaper; report per-subject bytes and blocked time every second,
-which is both the metering feed and the demand signal §4.2 runs on.
+with the pushed table, failing closed; build the relay on a host that
+shapes the two calls its bytes pass through (§4.5); report per-subject
+bytes and blocked time every second, which is both the metering feed and
+the demand signal §4.2 runs on.
 
 **`internal/config/config.go`** — `relays []string` becomes
 `coordinator`. Keep a manual relay override for single-relay
@@ -634,7 +662,7 @@ Risk first, and the part that costs money last.
    the part that touches every agent, so it is the part to get wrong
    early. *Check: kill a relay mid-transfer; the pair is back on another
    one, and the application above is told the stream died.*
-2. **The shaper, on one relay.** Vendored hop, one bucket per subject,
+2. **The shaper, on one relay.** A shaped host, one bucket per subject,
    live `SETLIMIT`. *Check: two machines on a 10 MB/s subject, one
    behind a 1 MB/s link, measure 9 and 1 — not 5 and 1. A limit changed
    during a transfer takes effect during it.*

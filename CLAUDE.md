@@ -23,7 +23,7 @@ binaries and a package:
 |------|------|
 | `transport` | The package at the module root. The surface an application uses; everything else is `internal/`. |
 | `heimdall` | A relay node. Forwards encrypted bytes it cannot read. |
-| `bifrost` | The relay coordinator: places and admits; shaping, metering and scaling are designed in `FLEET.md` and not built. |
+| `bifrost` | The relay coordinator: places, admits and sets rates; metering and scaling are designed in `FLEET.md` and not built. |
 | `ratatoskr` | The test harness — `id`, `run`, `discover`, `connect`, `bench`, NAT diagnostics. Not a product. |
 
 The Norse names are on the wire already, in protocol identifiers like
@@ -56,10 +56,11 @@ only. `git log` has the original wording; do not re-add any of it here.
 
 Steps 0 to 5 are done. Step 6 is half done: the two boxes that are code
 are ticked, and the three that need a person moving a cable are not. Step
-7 has started: `FLEET.md` §9 step 1 is built — relays register, machines
-lease, and a machine the coordinator did not place is refused — and it
-has never carried a byte outside a test. Shaping, the allowance loop,
-metering and scaling are designed and not built. `TODO.md` has the
+7 has started: `FLEET.md` §9 steps 1 and 2 are built — relays register,
+machines lease, a machine the coordinator did not place is refused, and
+each subject's bytes pass through one bucket that a rate change reaches
+mid-transfer — and none of it has carried a byte outside a test. The
+allowance loop, metering and scaling are designed and not built. `TODO.md` has the
 per-step detail, including why each decision went the way it did.
 
 Numbers, because a claim without one is not allowed here. All taken 9 Sep
@@ -142,7 +143,7 @@ make cross                      # all five targets from one machine
 make clean
 
 # tests, without internal/discovery
-go test ./transport/ ./internal/config/ ./internal/identity/ ./cmd/... -count=1
+go test ./transport/ ./internal/config/ ./internal/identity/ ./internal/shape/ ./cmd/... -count=1
 ```
 
 ## Constraints that are not negotiable
@@ -261,6 +262,18 @@ sends the rest on a new one — `Path.BetterThan` holds the order, and
 `ratatoskr bench` is the worked example. What the transport cannot do is
 save the request that was in flight: reissuing it is resume, and resume
 is the caller's, because only the caller knows what an offset means.
+
+**Rates are shaped by subject, and the hook is a host.** `relay.New`
+takes a `host.Host`, which is an interface, and every byte a relay
+forwards arrives through two of its methods: the handler registered for
+machines dialling in, and the stream opened to the machine being dialled.
+`cmd/heimdall/shape.go` embeds the real host and overrides exactly those
+two, so `internal/shape` sees the whole byte path with no fork of
+libp2p's relay. Reads are shaped and writes are not, on purpose: a
+forwarded byte is read from one leg and written to the other, so shaping
+reads charges it once. One bucket per subject and no per-circuit limit —
+equal division is the one split that wastes whatever a slow machine
+cannot use — with the relay's own ceiling underneath.
 
 ## Traps
 

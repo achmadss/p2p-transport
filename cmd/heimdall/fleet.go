@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/achmadss/p2p-transport/internal/shape"
 	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -25,9 +26,16 @@ import (
 type admitted struct {
 	mu  sync.RWMutex
 	set map[peer.ID]bool
+
+	// limits is where the same pushes land as rates. Kept beside the
+	// access list because they arrive together and change together: a
+	// machine is admitted at a rate, and revoked from both at once.
+	limits *shape.Limits
 }
 
-func newAdmitted() *admitted { return &admitted{set: map[peer.ID]bool{}} }
+func newAdmitted(limits *shape.Limits) *admitted {
+	return &admitted{set: map[peer.ID]bool{}, limits: limits}
+}
 
 func (a *admitted) allow(id peer.ID, yes bool) {
 	a.mu.Lock()
@@ -36,6 +44,26 @@ func (a *admitted) allow(id peer.ID, yes bool) {
 		a.set[id] = true
 	} else {
 		delete(a.set, id)
+	}
+}
+
+// apply carries out one instruction from the coordinator.
+func (a *admitted) apply(c wire.Command) {
+	if c.Op == wire.OpSetLimit {
+		a.limits.SetLimit(c.Subject, c.Rate)
+		return
+	}
+	id, err := peer.Decode(c.Peer)
+	if err != nil {
+		return
+	}
+	switch c.Op {
+	case wire.OpAdmit:
+		a.allow(id, true)
+		a.limits.Admit(id, c.Subject, c.Rate)
+	case wire.OpRevoke:
+		a.allow(id, false)
+		a.limits.Revoke(id)
 	}
 }
 
@@ -134,15 +162,6 @@ func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo
 		if err := dec.Decode(&c); err != nil {
 			return true, err
 		}
-		id, err := peer.Decode(c.Peer)
-		if err != nil {
-			continue
-		}
-		switch c.Op {
-		case wire.OpAdmit:
-			a.allow(id, true)
-		case wire.OpRevoke:
-			a.allow(id, false)
-		}
+		a.apply(c)
 	}
 }

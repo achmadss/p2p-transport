@@ -16,8 +16,10 @@ import (
 
 	"github.com/achmadss/p2p-transport/internal/config"
 	"github.com/achmadss/p2p-transport/internal/identity"
+	"github.com/achmadss/p2p-transport/internal/shape"
 	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	"github.com/multiformats/go-multiaddr"
@@ -68,6 +70,9 @@ environment (empty means the default):
                              is open to anyone who knows its address.
   HEIMDALL_BANDWIDTH         bytes per second, PER DIRECTION, this
                              relay can forward, K/M/G suffixes  (50M)
+                             It is both what the coordinator places
+                             against and the ceiling this relay
+                             enforces on everything it forwards.
                              A relayed byte crosses the machine twice,
                              so this is not the provider's headline
                              number unless that number is per
@@ -125,31 +130,39 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// relayHost is what the relay is built on: the host itself when
+	// there is no coordinator, and a shaped view of it when there is.
+	relayHost := host.Host(h)
 	var relayOpts []relay.Option
 	if len(coord) > 0 {
 		info, err := peer.AddrInfoFromP2pAddr(coord[0])
 		if err != nil {
 			return fmt.Errorf("HEIMDALL_BIFROST names no peer: %w", err)
 		}
+		bandwidth := config.Bytes("HEIMDALL_BANDWIDTH", defaultBandwidth)
+		limits := shape.New(bandwidth)
+		relayHost = shapedHost{Host: h, limits: limits}
+
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		acl := newAdmitted()
+		acl := newAdmitted(limits)
 		relayOpts = append(relayOpts, relay.WithACL(acl))
-		go acl.follow(ctx, h, *info, config.Bytes("HEIMDALL_BANDWIDTH", defaultBandwidth))
+		go acl.follow(ctx, h, *info, bandwidth)
 	}
 
 	// The default circuit allows 128 KB over two minutes, sized for
 	// signalling rather than for files. A relayed transfer here is a
 	// whole video, so the limit is raised to one a person might reach.
 	//
-	// ponytail: one limit for everyone. Per-machine limits and metering
-	// come with the relay fleet, and need a coordinator to push them.
+	// It is a byte cap and a lifetime, not a rate, and it is the same
+	// for everyone. With a coordinator the rates come from the shaper
+	// above and this stays as the backstop it is.
 	res := relay.DefaultResources()
 	res.Limit = &relay.RelayLimit{
 		Duration: config.Duration("HEIMDALL_CIRCUIT_DURATION", defaultDuration),
 		Data:     config.Bytes("HEIMDALL_CIRCUIT_DATA", defaultData),
 	}
-	if _, err := relay.New(h, append(relayOpts, relay.WithResources(res))...); err != nil {
+	if _, err := relay.New(relayHost, append(relayOpts, relay.WithResources(res))...); err != nil {
 		return fmt.Errorf("start relay: %w", err)
 	}
 

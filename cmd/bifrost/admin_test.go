@@ -21,7 +21,7 @@ func TestSubjectDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := admin(st, 7, 70)
+	h := admin(st, 7, 70, nil)
 
 	if got := put(t, h, "/v1/subjects/alice", `{}`); got != http.StatusNoContent {
 		t.Fatalf("PUT with no rates = %d, want 204", got)
@@ -45,7 +45,7 @@ func TestSubjectRatesRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := admin(st, 7, 70)
+	h := admin(st, 7, 70, nil)
 
 	for _, body := range []string{`{"min":100,"max":10}`, `{"min":-1}`, `{"max":0}`, `not json`} {
 		if got := put(t, h, "/v1/subjects/x", body); got != http.StatusBadRequest {
@@ -65,7 +65,7 @@ func TestSubjectsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := put(t, admin(st, 7, 70), "/v1/subjects/alice", `{"min":5,"max":50}`); got != http.StatusNoContent {
+	if got := put(t, admin(st, 7, 70, nil), "/v1/subjects/alice", `{"min":5,"max":50}`); got != http.StatusNoContent {
 		t.Fatalf("PUT = %d, want 204", got)
 	}
 	if err := st.setDevices("alice", []string{"machine-1"}); err != nil {

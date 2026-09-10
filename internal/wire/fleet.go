@@ -31,15 +31,31 @@ type Register struct {
 
 // Command is one instruction pushed down the fleet stream.
 type Command struct {
-	Op   string `json:"op"`
-	Peer string `json:"peer"`
+	Op string `json:"op"`
+
+	// Peer is the machine an admit or a revoke is about.
+	Peer string `json:"peer,omitempty"`
+
+	// Subject is who the machine belongs to. Every machine of one
+	// subject shares that subject's rate on a relay, so this is the key
+	// the relay meters and limits by, and the machine id is not.
+	Subject string `json:"subject,omitempty"`
+
+	// Rate is the subject's ceiling in bytes per second: what its
+	// machines may reach between them when the relay is quiet. Sent with
+	// an admit and again whenever it changes.
+	//
+	// The floor is not here on purpose. A floor is kept by not
+	// overselling the relay in the first place, which is the
+	// coordinator's job; throttling cannot create one.
+	Rate int64 `json:"rate,omitempty"`
 }
 
-// The instructions a relay understands. Rate limits are pushed the same
-// way once the shaper exists.
+// The instructions a relay understands.
 const (
-	OpAdmit  = "admit"  // this machine may reserve here
-	OpRevoke = "revoke" // it may not, any more
+	OpAdmit    = "admit"    // this machine may reserve here, at this rate
+	OpRevoke   = "revoke"   // it may not, any more
+	OpSetLimit = "setlimit" // this subject's rate has changed
 )
 
 // Lease is the coordinator's answer to an agent.

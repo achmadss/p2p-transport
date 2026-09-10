@@ -74,6 +74,7 @@ func (n *relayNode) push(c wire.Command) error {
 // A placement is one machine on one relay, until it stops renewing.
 type placement struct {
 	relay   peer.ID
+	subject string
 	min     int64
 	expires time.Time
 }
@@ -146,7 +147,7 @@ func (f *fleet) pick(min int64) *relayNode {
 // network and on whatever it can dial directly, which is a complete way
 // to run. Refusing beats placing a machine the fleet cannot carry.
 func (f *fleet) lease(who peer.ID) wire.Lease {
-	_, sub, ok := f.store.find(who.String())
+	id, sub, ok := f.store.find(who.String())
 	if !ok {
 		return wire.Lease{TTL: f.knobs.ttl}
 	}
@@ -168,13 +169,23 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 		f.mu.Unlock()
 		return wire.Lease{TTL: f.knobs.ttl}
 	}
-	f.placed[who] = &placement{relay: n.id, min: sub.Min, expires: time.Now().Add(f.knobs.ttl)}
+	f.placed[who] = &placement{
+		relay:   n.id,
+		subject: id,
+		min:     sub.Min,
+		expires: time.Now().Add(f.knobs.ttl),
+	}
 	f.mu.Unlock()
 
 	// Admit before answering, or the agent races its own lease: it
 	// would dial the relay and be refused by an access list that has
 	// not heard of it yet.
-	if err := n.push(wire.Command{Op: wire.OpAdmit, Peer: who.String()}); err != nil {
+	if err := n.push(wire.Command{
+		Op:      wire.OpAdmit,
+		Peer:    who.String(),
+		Subject: id,
+		Rate:    sub.Max,
+	}); err != nil {
 		f.drop(n.id)
 		return wire.Lease{TTL: f.knobs.ttl}
 	}
@@ -201,22 +212,59 @@ func (f *fleet) drop(id peer.ID) {
 func (f *fleet) register(id peer.ID, r wire.Register, enc *json.Encoder) *relayNode {
 	n := &relayNode{id: id, addrs: r.Addrs, bandwidth: r.Bandwidth, enc: enc}
 
+	// The subjects are looked up after the lock is dropped, so this
+	// never holds the fleet's lock and the store's at once.
 	f.mu.Lock()
 	f.relays[id] = n
-	var back []string
+	back := map[string]string{} // machine id -> subject id
 	for who, p := range f.placed {
 		if p.relay == id {
-			back = append(back, who.String())
+			back[who.String()] = p.subject
 		}
 	}
 	f.mu.Unlock()
 
-	for _, who := range back {
-		if err := n.push(wire.Command{Op: wire.OpAdmit, Peer: who}); err != nil {
+	for who, subject := range back {
+		_, sub, ok := f.store.subject(subject)
+		if !ok {
+			continue
+		}
+		if err := n.push(wire.Command{
+			Op:      wire.OpAdmit,
+			Peer:    who,
+			Subject: subject,
+			Rate:    sub.Max,
+		}); err != nil {
 			break
 		}
 	}
 	return n
+}
+
+// setLimit tells every relay carrying a subject that its rate has
+// changed. The relays apply it to the transfers already running, so a
+// plan changed while somebody is downloading changes that download.
+//
+// A relay that has gone is dropped rather than retried: the machines on
+// it will be placed again, and they will carry the new rate with them.
+func (f *fleet) setLimit(subject string, max int64) {
+	f.mu.Lock()
+	carrying := map[peer.ID]*relayNode{}
+	for _, p := range f.placed {
+		if p.subject != subject {
+			continue
+		}
+		if n, ok := f.relays[p.relay]; ok {
+			carrying[p.relay] = n
+		}
+	}
+	f.mu.Unlock()
+
+	for _, n := range carrying {
+		if err := n.push(wire.Command{Op: wire.OpSetLimit, Subject: subject, Rate: max}); err != nil {
+			f.drop(n.id)
+		}
+	}
 }
 
 // expire drops placements nobody renewed and tells the relay to stop

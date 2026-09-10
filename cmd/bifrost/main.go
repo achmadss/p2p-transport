@@ -110,14 +110,16 @@ func run() error {
 
 	done := make(chan struct{})
 	defer close(done)
-	newFleet(st, knobsFromEnv()).serve(h, done)
+	f := newFleet(st, knobsFromEnv())
+	f.serve(h, done)
 
 	// The admin API is the only part an operator can get wrong in a way
 	// that matters, so its address is printed whether it is loopback or
 	// not.
 	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(st,
 		config.Bytes("BIFROST_SUBJECT_MIN", defaultSubjectMin),
-		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax))}
+		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax),
+		f.setLimit)}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "admin API stopped:", err)

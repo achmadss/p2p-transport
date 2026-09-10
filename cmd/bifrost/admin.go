@@ -69,6 +69,17 @@ func (s *store) save() error {
 	return os.WriteFile(s.path, append(b, '\n'), 0o600)
 }
 
+// subject returns one subject by id.
+func (s *store) subject(id string) (string, subject, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.subjects[id]
+	if !ok {
+		return "", subject{}, false
+	}
+	return id, *sub, true
+}
+
 // find returns the subject a machine belongs to.
 //
 // ponytail: a scan of every subject. A map from machine to subject when
@@ -136,8 +147,14 @@ const (
 // It carries no authentication and must not be exposed. Bind it to
 // loopback, or to a private interface behind whatever already guards
 // the application's own admin traffic.
-func admin(s *store, defMin, defMax int64) http.Handler {
+// changed is told when a subject's ceiling moves, so the relays
+// carrying it can be sent the new one. Nil in a test that only cares
+// about the store.
+func admin(s *store, defMin, defMax int64, changed func(subject string, max int64)) http.Handler {
 	mux := http.NewServeMux()
+	if changed == nil {
+		changed = func(string, int64) {}
+	}
 
 	mux.HandleFunc("PUT /v1/subjects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		// Pointers so an omitted rate takes the default and an explicit
@@ -164,10 +181,14 @@ func admin(s *store, defMin, defMax int64) http.Handler {
 			http.Error(w, "need 0 <= min <= max, and max above zero, in bytes per second", http.StatusBadRequest)
 			return
 		}
-		if err := s.set(r.PathValue("id"), min, max); err != nil {
+		id := r.PathValue("id")
+		if err := s.set(id, min, max); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Pushed after the write, so a relay never enforces a rate that
+		// a restart would not bring back.
+		changed(id, max)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

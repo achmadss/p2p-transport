@@ -192,7 +192,8 @@ shapes.
 - [x] Heimdall joins a fleet: registers, follows the pushed access list,
       and refuses everyone else
 - [ ] `bifrost`: metering — per-subject counters and the usage endpoint
-- [ ] Vendored relay hop: one bucket per subject, no per-circuit limiter
+- [x] The shaper: one bucket per subject, no per-circuit limiter, and a
+      rate change that reaches a transfer already running
 - [ ] The allowance loop: demand reported per second, max-min allocated
       across the relays carrying a subject, pushed back
 - [x] Agents lease a relay instead of reading one from `config.json`,
@@ -240,6 +241,19 @@ SQLite when metering lands, since counters are the first state that
 cannot be rebuilt. And a relay that loses the coordinator keeps its
 access list exactly as it was, so an outage stops new machines arriving
 and does not evict the ones already relaying.
+
+The shaper did not need the fork `FLEET.md` §4.5 called for, and that
+section now says why. Every byte a relay forwards arrives through one of
+two calls on the host it was built with, and `relay.New` takes a
+`host.Host` interface — so the hook is a host that embeds the real one
+and overrides those two methods, twenty lines against a thousand-line
+copy of somebody else's package. Reads are shaped and writes are not,
+which is not an omission: a forwarded byte is read from one leg and
+written to the other, so shaping reads charges it exactly once.
+
+What the fork would have given and this does not, yet, is the blocked
+time §4.2 runs on. It is the same wait, and measuring it is a line in
+`pay`; nothing reads it until metering exists, so it is not there.
 
 Every number the arithmetic turns on is an environment variable with a
 default: `BIFROST_HEADROOM` (0.70) and `BIFROST_PACK_TO` (0.85) decide
