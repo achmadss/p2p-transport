@@ -199,17 +199,21 @@ func (c *Client) List(ctx context.Context) ([]provision.Machine, error) {
 			} `json:"data"`
 		}
 		q := url.Values{
-			"limit":  {strconv.Itoa(perPage)},
-			"page":   {strconv.Itoa(page)},
-			"search": {c.prefix},
+			"limit": {strconv.Itoa(perPage)},
+			"page":  {strconv.Itoa(page)},
 		}
 		if err := c.call(ctx, http.MethodGet, "/instance?"+q.Encode(), nil, &r); err != nil {
 			return nil, err
 		}
 		for _, in := range r.Data.Data {
-			// search is a substring match on the server, so the prefix is
-			// checked again here. A machine named after somebody else's
-			// convention must never be destroyed as an orphan.
+			// The whole account is listed and the prefix is applied
+			// here. DEPA has a search parameter that would narrow it and
+			// it is deliberately not used: a search that quietly matched
+			// too little would hide a relay from the reconcile, which
+			// would then buy another one and bill for both. Filtering
+			// locally cannot fail that way, and it is also what keeps
+			// somebody else's machine in the same account from being
+			// destroyed as an orphan.
 			if !strings.HasPrefix(in.Hostname, c.prefix) {
 				continue
 			}

@@ -16,6 +16,7 @@ import (
 // it was called with, because most of what matters here is which call
 // was made rather than what came back.
 type fake struct {
+	t        *testing.T
 	rows     []map[string]any
 	clones   int
 	deleted  []string
@@ -25,6 +26,7 @@ type fake struct {
 
 func (f *fake) serve(t *testing.T) *Client {
 	t.Helper()
+	f.t = t
 	mux := http.NewServeMux()
 	fail := func(w http.ResponseWriter) bool {
 		if f.status == 0 {
@@ -36,6 +38,12 @@ func (f *fake) serve(t *testing.T) *Client {
 	mux.HandleFunc("GET /v1/instance", func(w http.ResponseWriter, r *http.Request) {
 		if fail(w) {
 			return
+		}
+		// Narrowing the listing on the server is what the local prefix
+		// check exists to avoid depending on. Asking for it back would
+		// put the risk straight back.
+		if r.URL.Query().Has("search") {
+			f.t.Error("the listing asked the server to filter")
 		}
 		// One row per page, so the paging is actually exercised.
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))

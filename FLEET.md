@@ -720,7 +720,12 @@ happen, which is the honest shape of clone-based provisioning.
 this adapter makes is named `heimdall-` plus the key, `Create` lists
 before it clones, and `List` returns only the hostnames carrying that
 prefix — which is also what stops a reconcile destroying somebody
-else's machine in the same account as an orphan. The key must be a
+else's machine in the same account as an orphan. The listing asks for the
+whole account rather than passing DEPA's `search` parameter, on purpose:
+a search that quietly matched too little would hide a relay from the
+reconcile, and the reconcile would buy another one and bill for both.
+Filtering locally cannot fail that way, and at a hundred rows a page the
+extra round trip costs nothing. The key must be a
 legal hostname and is checked, so trimming the prefix gives the key back
 exactly. The check is a listing rather than a lock, so two `Create`s
 racing inside one round trip could still both clone; one coordinator
@@ -741,6 +746,22 @@ prints a time with no timezone on it and guessing which one DEPA means
 is exactly the kind of unmeasured number this project keeps retracting;
 the loop knows when it asked for a machine, which is the better clock
 for a cooldown anyway.
+
+What of this has been checked against the live API, on 10 Sep 2026 and
+with a real key: `GET /v1/instance` and `GET /v1/instance/{uuid}/detail`
+answer with every field this adapter reads, spelled as it reads them,
+including `data.page.total_pages` and detail's
+`estimated_monthly_price` — which the listing spells
+`estimated_monthly_cost`, so the two are not interchangeable. A machine
+gets a routable public address on its own interface, so
+`HEIMDALL_ANNOUNCE` is probably unnecessary there. `created_at` carries
+no timezone in either of the two formats it comes in, which is why
+`Machine.Created` is left zero. And `GET /v1/tiers`, which the docs
+describe, redirects to the documentation site instead of answering — a
+reminder that the documentation and the API have drifted, and a reason
+this adapter calls as few endpoints as it can. Cloning, destroying and
+the `search` parameter's exact behaviour are still unchecked, the last of
+those now permanently, since nothing here uses it.
 
 `ErrNoCapacity` is never returned. DEPA documents no error catalogue, so
 the adapter classifies on HTTP status alone: 429 and 5xx are
