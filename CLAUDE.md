@@ -229,6 +229,17 @@ opened after it lands, and `PathTo` reports the change because it reads
 the live connections. This is Tailscale's shape, not DCUtR's, which still
 runs beside it and tries three times at connection time.
 
+A machine asks for another relay the moment the one it has stops being
+usable, and there are two ways that happens. A relay that dies while
+connected raises a disconnect, and `relaySet.gone` wakes the lease loop.
+A relay that was already dead when the coordinator named it never
+disconnects and raises nothing, so `dialRelays` wakes the loop itself the
+first time it cannot reach one — only the first time, because a
+coordinator that answers with the same dead relay and a machine that asks
+again at once would spin against each other. Without that second path the
+machine waits for its next renewal, unreachable from outside for as long
+as half a lease.
+
 `repair` is the one place that decides which way the ladder is walked.
 Both notifee hooks call it on every connect and disconnect, and it reads
 the *best* path to the peer rather than the connection that fired: on

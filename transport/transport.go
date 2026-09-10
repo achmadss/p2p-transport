@@ -359,6 +359,16 @@ func (t *Host) dialRelays(relays []peer.AddrInfo, observed *atomic.Value, down m
 			if !down[r.ID] {
 				fmt.Fprintf(os.Stderr, "relay %s unreachable: %v\n", r.ID, err)
 				down[r.ID] = true
+				// A relay that was already dead when it was handed out
+				// never disconnects, so nothing else says so. Ask the
+				// coordinator for another one now rather than at the
+				// next renewal, the same as when a live relay dies.
+				//
+				// Once per relay, because down is only set here: a
+				// coordinator that answers with the same dead relay is
+				// not asked again until something changes, which is what
+				// stops the pair of them spinning.
+				poke(t.relays.lost)
 			}
 			continue
 		}

@@ -3,6 +3,7 @@ package transport
 import (
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,5 +206,43 @@ func TestOneRelayWithManyAddressesStaysOneRelay(t *testing.T) {
 	}
 	if len(got[0].Addrs) != len(apart) {
 		t.Fatalf("the merged relay kept %d of %d addresses", len(got[0].Addrs), len(apart))
+	}
+}
+
+// A relay that was already dead when the coordinator handed it out never
+// disconnects, so the loss notification never fires and nothing else
+// notices. Dialling it is the only moment this machine learns, and the
+// wait until the next renewal is a minute this machine spends
+// unreachable for no reason.
+func TestARelayThatNeverAnsweredWakesTheLeaseLoop(t *testing.T) {
+	h := wrap(newHost(t))
+	defer h.Close()
+
+	// A host that has been closed leaves an address nothing answers on,
+	// which is exactly the shape of a relay destroyed a moment before the
+	// coordinator named it.
+	dead := newHost(t)
+	info := peer.AddrInfo{ID: dead.ID(), Addrs: dead.Addrs()}
+	dead.Close()
+
+	h.relays.set([]peer.AddrInfo{info})
+	<-h.relays.changed
+
+	var observed atomic.Value
+	h.dialRelays([]peer.AddrInfo{info}, &observed, map[peer.ID]bool{})
+	select {
+	case <-h.relays.lost:
+	default:
+		t.Fatal("a relay that never answered did not wake the lease loop")
+	}
+
+	// Asked about a relay already known to be down, it stays quiet: a
+	// coordinator answering with the same dead relay must not turn into
+	// a loop between the two of them.
+	h.dialRelays([]peer.AddrInfo{info}, &observed, map[peer.ID]bool{info.ID: true})
+	select {
+	case <-h.relays.lost:
+		t.Fatal("a relay already known to be down was reported again")
+	default:
 	}
 }
