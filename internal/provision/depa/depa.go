@@ -163,7 +163,17 @@ func (c *Client) Create(ctx context.Context, s provision.Spec) (provision.Machin
 
 // Destroy terminates a machine and releases its public IP and disks.
 // A machine that is already gone is success.
+//
+// It refuses to destroy the instance every relay is cloned from. That
+// machine is the fleet's only copy of a working relay and nothing
+// rebuilds it, so losing it is not an outage that heals — it is an
+// afternoon with a fresh Ubuntu and the install notes. The listing's
+// prefix is supposed to keep the source out of the fleet's hands
+// already; this is the second lock, on the one door that matters.
 func (c *Client) Destroy(ctx context.Context, id string) error {
+	if id == c.source {
+		return fmt.Errorf("depa: refusing to destroy %s: it is the instance every relay is cloned from", id)
+	}
 	// The _method header is DEPA's own requirement for DELETE, not a
 	// workaround for anything here.
 	body := map[string]bool{"remove_ip": true, "remove_block_storage": true}

@@ -5,7 +5,21 @@ of the fleet's shape. `bifrost.service` is one machine with state, made
 by hand and kept; `heimdall.service` is a machine with none, which is
 what makes it something a scaling loop can buy and throw away.
 
-Build both on any machine with Go, including the one you develop on:
+`deploy/bootstrap check` says which of the two exist, and reads only, so
+it is free and safe to run whenever. `deploy/bootstrap create --yes`
+makes whichever is missing and leaves whichever is not — it asks the
+provider rather than remembering, so running it twice does nothing the
+second time.
+
+Neither of those two may be named with the fleet's prefix. The
+coordinator claims every hostname carrying it and eventually destroys
+what it claims, which for the relay source would mean destroying the only
+copy of a working relay. The script refuses such a name, and the adapter
+refuses to destroy its own clone source, because one lock on that door is
+not enough.
+
+Build both binaries on any machine with Go, including the one you develop
+on:
 
 ```
 make cross            # dist/bifrost-linux-amd64, dist/heimdall-linux-amd64

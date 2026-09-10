@@ -731,6 +731,15 @@ exactly. The check is a listing rather than a lock, so two `Create`s
 racing inside one round trip could still both clone; one coordinator
 runs one scaling loop, and that is the only reason it is safe.
 
+Two machines therefore exist that the fleet did not make and must never
+unmake: the coordinator, and the instance relays are cloned from. Neither
+may be named with the fleet's prefix, because the prefix is exactly what
+the adapter uses to decide what it owns, and what it owns it eventually
+destroys. `Destroy` refuses its own clone source outright as a second
+lock on that door — nothing rebuilds it, so losing it is not an outage
+that heals but an afternoon with a fresh Ubuntu and the install notes.
+`deploy/bootstrap` makes those two and refuses a name that would collide.
+
 **DEPA publishes no bandwidth figure anywhere** — not per tier, not per
 size, not per location, not as a monthly transfer allowance. So
 `Size.Bandwidth` comes from `Options.Bandwidth`, a number measured on a

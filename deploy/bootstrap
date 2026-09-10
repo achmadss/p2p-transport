@@ -1,0 +1,200 @@
+#!/bin/sh
+# Make the two machines a fleet cannot make for itself.
+#
+#   deploy/bootstrap check          what exists now. Free, reads only.
+#   deploy/bootstrap create --yes   make what is missing. Spends money.
+#
+# There are exactly two, and neither is disposable.
+#
+# The coordinator is the one machine with state that matters: its peer id
+# is what every relay and every agent is configured with. It is made once
+# and kept.
+#
+# The relay source is the machine every relay is a copy of. This provider
+# has no cloud-init and no image upload, so there is no way to hand a
+# fresh VPS a program — a relay can only be a clone of one that was set
+# up by hand. Prepare it once, stop it, and it costs a disk rather than a
+# machine until the coordinator clones it.
+#
+# Relays themselves are not made here. The coordinator makes those, and
+# it destroys them again, which is the whole reason this script stops at
+# two.
+
+set -eu
+
+usage() {
+	cat >&2 <<'USAGE'
+usage: bootstrap check
+       bootstrap create --yes
+
+environment:
+  DEPA_API_KEY    required
+  PROVIDER        which cloud to build on                    (depa)
+  VPS_PASSWORD    root password, required by create
+  BIFROST_HOST    hostname of the coordinator                (bifrost)
+  SOURCE_HOST     hostname of the relay source          (relay-source)
+  FLEET_PREFIX    hostnames the coordinator owns and may destroy
+                                                          (heimdall-)
+  VPS_LOCATION    data centre id, from GET /v1/locations         (1)
+  VPS_TIER        performance tier id                            (3)
+  VPS_TEMPLATE    OS template id                                 (7)
+  VPS_CPU         cores                                          (1)
+  VPS_MEMORY      GB                                             (1)
+  VPS_DISK        GB                                            (20)
+
+The tier, template and size defaults are what this account already runs.
+Read them off a machine you have with `deploy/depa detail <uuid>` before
+changing them: this provider's own tier listing does not answer.
+USAGE
+	exit 2
+}
+
+PROVIDER=${PROVIDER:-depa}
+[ "$PROVIDER" = depa ] || { echo "bootstrap: no adapter for provider $PROVIDER" >&2; exit 1; }
+
+: "${DEPA_API_KEY:?set DEPA_API_KEY}"
+BASE=${DEPA_BASE:-https://api.depa.id/v1}
+
+BIFROST_HOST=${BIFROST_HOST:-bifrost}
+SOURCE_HOST=${SOURCE_HOST:-relay-source}
+FLEET_PREFIX=${FLEET_PREFIX:-heimdall-}
+
+VPS_LOCATION=${VPS_LOCATION:-1}
+VPS_TIER=${VPS_TIER:-3}
+VPS_TEMPLATE=${VPS_TEMPLATE:-7}
+VPS_CPU=${VPS_CPU:-1}
+VPS_MEMORY=${VPS_MEMORY:-1}
+VPS_DISK=${VPS_DISK:-20}
+
+# Neither of these two may wear the fleet's prefix. The coordinator
+# claims every hostname carrying it, and a machine it claims is one it
+# will eventually destroy — which for the relay source means destroying
+# the only copy of a working relay, and for the coordinator means
+# destroying itself.
+for h in "$BIFROST_HOST" "$SOURCE_HOST"; do
+	case $h in
+	"$FLEET_PREFIX"*)
+		echo "bootstrap: $h starts with $FLEET_PREFIX, which the coordinator owns and destroys" >&2
+		exit 1
+		;;
+	esac
+done
+
+api() {
+	m=$1
+	p=$2
+	shift 2
+	curl -sS -X "$m" "$BASE$p" -H "x-apikey: $DEPA_API_KEY" \
+		-H "Accept: application/json" -H "Content-Type: application/json" "$@"
+}
+
+rows() {
+	page=1
+	while :; do
+		body=$(api GET "/instance?limit=100&page=$page")
+		echo "$body" | jq -c '.data.data[]?'
+		total=$(echo "$body" | jq -r '.data.page.total_pages // 0')
+		page=$((page + 1))
+		[ "$page" -gt "$total" ] && break
+	done
+}
+
+# uuid_of prints the uuid of a hostname, or nothing. Whether a machine
+# exists is the only question this script asks twice, so it asks the
+# provider rather than remembering an answer.
+uuid_of() {
+	rows | jq -r --arg h "$1" 'select(.hostname == $h) | .uuid' | head -n1
+}
+
+report() {
+	all=$(rows)
+	for pair in "coordinator:$BIFROST_HOST" "relay source:$SOURCE_HOST"; do
+		what=${pair%%:*}
+		host=${pair#*:}
+		line=$(echo "$all" | jq -r --arg h "$host" \
+			'select(.hostname == $h) | "\(.uuid)  \(.status)  \(.ip_address // "no address yet")"')
+		if [ -n "$line" ]; then
+			echo "$what     $host  $line"
+		else
+			echo "$what     $host  MISSING"
+		fi
+	done
+	n=$(echo "$all" | jq -r --arg p "$FLEET_PREFIX" 'select(.hostname | startswith($p)) | .uuid' | wc -l | tr -d ' ')
+	echo "relays       $FLEET_PREFIX*  $n, made and destroyed by the coordinator"
+}
+
+create_one() {
+	host=$1
+	echo "creating $host: $VPS_CPU CPU, ${VPS_MEMORY}GB RAM, ${VPS_DISK}GB disk," \
+		"location $VPS_LOCATION, tier $VPS_TIER, template $VPS_TEMPLATE" >&2
+	out=$(api POST /instance/create -d "$(jq -n \
+		--argjson location_id "$VPS_LOCATION" --argjson tier_id "$VPS_TIER" \
+		--argjson template_id "$VPS_TEMPLATE" --arg hostname "$host" \
+		--argjson cpu "$VPS_CPU" --argjson memory "$VPS_MEMORY" --argjson storage "$VPS_DISK" \
+		--arg password "$VPS_PASSWORD" \
+		'{location_id:$location_id, tier_id:$tier_id, template_id:$template_id,
+		  hostname:$hostname, cpu:$cpu, memory:$memory, storage:$storage,
+		  username:"root", password:$password, ssh_keys:[],
+		  use_dedicated_cpu:false, include_backup:false, use_public_ip:true}')")
+	uuid=$(echo "$out" | jq -r '.data.uuid // empty')
+	[ -n "$uuid" ] || { echo "bootstrap: create failed: $out" >&2; exit 1; }
+	echo "  $uuid" >&2
+}
+
+# wait_running polls until a machine answers with an address, because a
+# create returns as soon as the provider has accepted and says nothing
+# about whether the machine is up.
+wait_running() {
+	host=$1
+	i=0
+	while [ "$i" -lt 60 ]; do
+		line=$(rows | jq -r --arg h "$host" 'select(.hostname == $h) | "\(.status) \(.ip_address // "")"')
+		case $line in
+		"Running "*) echo "$host is up at ${line#Running }" >&2; return 0 ;;
+		esac
+		i=$((i + 1))
+		sleep 10
+	done
+	echo "$host did not come up within ten minutes; check the dashboard" >&2
+	return 1
+}
+
+case ${1:-} in
+check)
+	report
+	;;
+create)
+	[ "${2:-}" = --yes ] || { echo "bootstrap: create spends money; pass --yes" >&2; exit 1; }
+	: "${VPS_PASSWORD:?set VPS_PASSWORD to the root password these machines should have}"
+	made=
+	for host in "$BIFROST_HOST" "$SOURCE_HOST"; do
+		if [ -n "$(uuid_of "$host")" ]; then
+			echo "$host already exists, leaving it alone" >&2
+		else
+			create_one "$host"
+			made="$made $host"
+		fi
+	done
+	for h in $made; do wait_running "$h"; done
+	echo
+	report
+	echo
+	cat >&2 <<NEXT
+
+Both machines are bare Ubuntu. Nothing is installed on them yet.
+
+  1. Install the coordinator on $BIFROST_HOST, and copy the multiaddr it
+     prints out of its log.
+  2. Install a relay on $SOURCE_HOST with that address in
+     HEIMDALL_BIFROST, watch it say "registered with the coordinator",
+     then measure what it forwards and put that in HEIMDALL_BANDWIDTH.
+  3. Stop $SOURCE_HOST. It is now the image, and its uuid is what the
+     coordinator clones.
+
+deploy/README.md has the commands for 1 and 2.
+NEXT
+	;;
+*)
+	usage
+	;;
+esac

@@ -248,3 +248,20 @@ func TestNewInsistsOnAMeasuredBandwidth(t *testing.T) {
 		}
 	}
 }
+
+// Nothing rebuilds the instance relays are cloned from. Whatever names a
+// machine to destroy — a reconcile that miscounts, an operator with the
+// wrong uuid on the clipboard — must not be able to name that one.
+func TestTheCloneSourceCannotBeDestroyed(t *testing.T) {
+	f := &fake{}
+	c := f.serve(t)
+	if err := c.Destroy(context.Background(), "src"); err == nil {
+		t.Fatal("the clone source was destroyed")
+	}
+	if len(f.deleted) != 0 {
+		t.Fatalf("the delete was sent anyway: %v", f.deleted)
+	}
+	if err := c.Destroy(context.Background(), "some-other-machine"); err != nil {
+		t.Fatal(err)
+	}
+}
