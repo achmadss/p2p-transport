@@ -195,7 +195,7 @@ shapes.
 - [ ] Vendored relay hop: one bucket per subject, no per-circuit limiter
 - [ ] The allowance loop: demand reported per second, max-min allocated
       across the relays carrying a subject, pushed back
-- [ ] Agents lease a relay instead of reading one from `config.json`,
+- [x] Agents lease a relay instead of reading one from `config.json`,
       and re-lease without a deadline when a relay dies
 - [ ] Autoscale within `min`/`max`; pack tight, shed the idle first,
       drain the emptiest relay before destroying it
@@ -205,13 +205,32 @@ another one; two machines on one subject behind a fast and a slow link
 measure 9 and 1 rather than 5 and 1, on the same relay or on two; a
 limit changed mid-transfer takes effect mid-transfer.
 
-The coordinator and the relay half of `FLEET.md` §9 step 1 are built,
-and the agent half is not: `ratatoskr` still reads its relay from
-`config.json`, so nothing leases yet and the placement code has never
-carried a byte. The state that survives a restart is the subjects file
-and nothing else — relays re-register and machines re-lease, so a
-coordinator that restarts costs one round of each rather than a
-recovery.
+`FLEET.md` §9 step 1 is built end to end: relays register, machines
+lease, and the access list refuses everyone the coordinator did not
+place. What it has not done is carry a byte — the three parts have only
+ever met in tests, and the check at the top of this step needs three
+machines and someone to kill a relay. The state that survives a restart
+is the subjects file and nothing else: relays re-register and machines
+re-lease, so a coordinator that restarts costs one round of each rather
+than a recovery.
+
+The relay set is now a set that can be replaced rather than a list built
+at startup, and everything that reaches for a relay reads it there: the
+last rung of the dial ladder, the reservation that makes this machine
+reachable from outside, and the addresses handed to a peer. That is what
+lets a machine be moved. The reachability machinery is asked for
+candidates on every call instead of being handed a fixed list, and it is
+told one candidate is enough — the default is to collect four before
+reserving with any, and a machine given one relay would have waited out
+a three-minute boot delay before becoming reachable at all.
+
+The lease loop never gives up and never tears anything down. A
+coordinator that has gone quiet leaves the machine on the relay it
+already has, past the lease's end, because a working path is worth more
+than an expired promise; what stops is moving to a better one. The one
+thing that does not wait for the clock is the relay dying: the
+disconnection wakes the loop, since until another relay is placed
+nothing outside the local network can reach here.
 
 Two decisions in it are worth the sentence. The subject store is a JSON
 file rather than the SQLite `FLEET.md` §8 names, because at this step

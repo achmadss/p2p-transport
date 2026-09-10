@@ -127,6 +127,10 @@ func usage() {
 environment (empty means the default):
   RATATOSKR_CONFIG_DIR      where identity.key and config.json live
   RATATOSKR_RELAYS          comma-separated relays, overriding config.json
+  RATATOSKR_COORDINATOR     comma-separated addresses of the coordinator
+                            that hands relays out, overriding
+                            config.json. Set relays or a coordinator,
+                            not both.
   RATATOSKR_LAN_TIMEOUT     wait for the local network           (3s)
   RATATOSKR_LAN_HEAD_START  --via auto's LAN head start          (400ms)
   RATATOSKR_DIAL_TIMEOUT    whole connect attempt                (30s)
@@ -186,7 +190,11 @@ func start() (*transport.Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	return transport.New(transport.Config{Relays: r})
+	c, err := coordinator()
+	if err != nil {
+		return nil, err
+	}
+	return transport.New(transport.Config{Relays: r, Coordinator: c})
 }
 
 // relays is where this machine keeps the relays it may use: config.json,
@@ -208,12 +216,28 @@ var relays = sync.OnceValues(func() ([]string, error) {
 	return cfg.Relays, nil
 })
 
+// coordinator is where this machine asks which relay to use, read the
+// same way and from the same file as the relays above.
+var coordinator = sync.OnceValues(func() ([]string, error) {
+	if env := config.List("RATATOSKR_COORDINATOR"); len(env) > 0 {
+		return env, nil
+	}
+	cfg, err := config.Load("")
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Coordinator, nil
+})
+
 // configured answers the two callers that only want to know whether
-// there is a relay at all. Both run after start(), which has already
-// refused a config.json that does not parse.
+// this machine can be reached from another network at all. A
+// coordinator counts: it has not handed out a relay yet, but it is
+// going to. Both run after start(), which has already refused a
+// config.json that does not parse.
 func configured() bool {
 	r, _ := relays()
-	return len(r) > 0
+	c, _ := coordinator()
+	return len(r) > 0 || len(c) > 0
 }
 
 // lanPeers is what OnLAN has reported so far. The transport pushes and

@@ -53,8 +53,11 @@ var (
 // peer falls back to the relay and stays there.
 func (t *Host) watchForRelayed() {
 	t.h.Network().Notify(&network.NotifyBundle{
-		ConnectedF:    func(_ network.Network, c network.Conn) { t.changed(c.RemotePeer()) },
-		DisconnectedF: func(_ network.Network, c network.Conn) { t.changed(c.RemotePeer()) },
+		ConnectedF: func(_ network.Network, c network.Conn) { t.changed(c.RemotePeer()) },
+		DisconnectedF: func(_ network.Network, c network.Conn) {
+			t.relays.gone(c.RemotePeer())
+			t.changed(c.RemotePeer())
+		},
 	})
 }
 
@@ -162,12 +165,13 @@ func (t *Host) redial(id peer.ID) {
 			return
 		}
 	}
-	if len(t.circuits) == 0 {
+	circuits := t.relays.dialAddrs()
+	if len(circuits) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(t.ctx, upgradeDial)
 	defer cancel()
-	if err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: t.circuits}); err != nil {
+	if err := t.h.Connect(ctx, peer.AddrInfo{ID: id, Addrs: circuits}); err != nil {
 		if os.Getenv("RATATOSKR_DIAG") != "" {
 			fmt.Fprintf(os.Stderr, "no rung left to %s: %v\n", identity.Short(id.String()), err)
 		}

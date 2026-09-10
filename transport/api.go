@@ -38,7 +38,20 @@ type Config struct {
 	// Relays are relay addresses, as given by whoever runs one. Empty
 	// means no relay: this machine is reachable on the local network
 	// and wherever it can be dialled directly.
+	//
+	// Set these or Coordinator, not both. These name the relay to use
+	// and never change; a coordinator hands one out and can change it.
 	Relays []string
+
+	// Coordinator is where to ask which relay this machine should use,
+	// as given by whoever runs the fleet. Several addresses for the
+	// same coordinator are fine and are tried together.
+	//
+	// A machine with a coordinator asks at startup and keeps asking, so
+	// it follows the relay it is given rather than the one it was given
+	// once. Being told none is an answer: it runs on the local network
+	// and on whatever it can dial directly.
+	Coordinator []string
 
 	// NoLAN turns off discovery on the local network, so no multicast
 	// socket is opened.
@@ -89,7 +102,7 @@ func (t *Host) Connect(ctx context.Context, id PeerID, addrs []string) error {
 		return err
 	}
 	if len(info.Addrs) == 0 {
-		info.Addrs = t.circuits
+		info.Addrs = t.relays.dialAddrs()
 	}
 	if err := t.h.Connect(ctx, info); err != nil {
 		return fmt.Errorf("%w: connect to %s: %w", ErrUnreachable, id.Short(), err)

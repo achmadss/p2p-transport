@@ -44,9 +44,10 @@ type PeerID string                    // stable; survives restarts and address c
 func (id PeerID) Short() string        // for people
 
 type Config struct {
-    Dir    string           // where identity.key lives; "" is the per-OS default
-    Relays []string         // opaque tokens, from whoever runs the relay
-    NoLAN  bool             // skip local discovery entirely
+    Dir         string      // where identity.key lives; "" is the per-OS default
+    Relays      []string    // opaque tokens, from whoever runs the relay
+    Coordinator []string    // opaque tokens, from whoever runs the fleet
+    NoLAN       bool        // skip local discovery entirely
 }
 
 func New(cfg Config) (*Host, error)

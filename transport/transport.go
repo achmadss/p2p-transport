@@ -36,6 +36,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
@@ -84,10 +85,11 @@ type Host struct {
 	watchMu  sync.Mutex
 	watchers map[peer.ID][]*watcher
 
-	// circuits are the configured relays as dialable addresses. Empty on
-	// a machine with no relay, which then fails to reach an unreachable
-	// peer rather than hanging.
-	circuits []multiaddr.Multiaddr
+	// relays is what this machine may relay through: the addresses
+	// Config named, or whatever the coordinator has most recently
+	// leased. Empty on a machine with no relay, which then fails to
+	// reach an unreachable peer rather than hanging.
+	relays *relaySet
 }
 
 // New starts this machine's transport, loading or generating its
@@ -98,11 +100,33 @@ func New(cfg Config) (*Host, error) {
 		return nil, err
 	}
 	key := id.PrivateKey()
-	relays := cfg.Relays
-	infos, err := parseAddrs(relays)
+	infos, err := parseAddrs(cfg.Relays)
 	if err != nil {
 		return nil, err
 	}
+	coords, err := parseAddrs(cfg.Coordinator)
+	if err != nil {
+		return nil, err
+	}
+	if len(infos) > 0 && len(coords) > 0 {
+		return nil, fmt.Errorf("configure relays or a coordinator, not both")
+	}
+	var coord peer.AddrInfo
+	if len(coords) > 0 {
+		if coord, err = mergeInfos(coords); err != nil {
+			return nil, fmt.Errorf("coordinator: %w", err)
+		}
+	}
+
+	// Built before the host, because the option below closes over it and
+	// the lease loop starts filling it as soon as the host exists.
+	set := newRelaySet()
+	set.set(infos)
+
+	// A machine with a coordinator expects to need a relay even before
+	// it has been given one, so everything downstream is switched on the
+	// intention rather than on what has arrived so far.
+	usesRelay := len(infos) > 0 || len(coords) > 0
 
 	// The socket must be wrapped before libp2p opens it and is asked
 	// about long after, so the handle is made now and filled in by the
@@ -158,8 +182,19 @@ func New(cfg Config) (*Host, error) {
 		return out
 	}))
 
-	if len(infos) > 0 {
-		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(infos))
+	if usesRelay {
+		// The candidates are read from the set on every call rather
+		// than fixed at startup, so a machine the coordinator moves
+		// reserves with the relay it was moved to.
+		//
+		// One candidate is enough and is the normal case: without
+		// saying so, the default is to collect four before reserving
+		// with any, and a machine given one relay would wait out the
+		// boot delay before becoming reachable at all.
+		opts = append(opts, libp2p.EnableAutoRelayWithPeerSource(set.source,
+			autorelay.WithMinCandidates(1),
+			autorelay.WithNumRelays(1),
+		))
 	}
 	// AutoRelay reserves a slot only once AutoNAT has ruled this machine
 	// unreachable, and AutoNAT needs several independent peers to agree.
@@ -168,7 +203,7 @@ func New(cfg Config) (*Host, error) {
 	// one. RATATOSKR_ASSUME_PUBLIC opts out. A machine that really is
 	// reachable loses nothing, since it goes on advertising its direct
 	// addresses and peers prefer them.
-	if len(infos) > 0 && os.Getenv("RATATOSKR_ASSUME_PUBLIC") == "" {
+	if usesRelay && os.Getenv("RATATOSKR_ASSUME_PUBLIC") == "" {
 		opts = append(opts, libp2p.ForceReachabilityPrivate())
 	}
 
@@ -180,23 +215,18 @@ func New(cfg Config) (*Host, error) {
 	}
 	wire.HandleObserved(h)
 	handleAddrs(h)
-	// parseAddrs already refused anything unparseable, and appending the
-	// circuit suffix cannot break an address that parsed.
-	var circuits []multiaddr.Multiaddr
-	for _, r := range relays {
-		if a, err := multiaddr.NewMultiaddr(r + "/p2p-circuit"); err == nil {
-			circuits = append(circuits, a)
-		}
-	}
 	t := wrap(h)
-	t.circuits = circuits
+	t.relays = set
 	t.watchForRelayed()
 	// Both exist to get off a relay, so neither runs without one. With
 	// no relay there is no relayed connection to escape and no reason to
 	// ask eight reflectors every 27 seconds for the life of the process.
-	if len(infos) > 0 {
-		go t.holdRelays(infos, &observed)
+	if usesRelay {
+		go t.holdRelays(&observed)
 		go t.refreshMeasured(mine, &measured)
+	}
+	if len(coords) > 0 {
+		go t.lease(coord)
 	}
 	if !cfg.NoLAN {
 		lan, err := discovery.Start(h, t.found)
@@ -218,7 +248,7 @@ func New(cfg Config) (*Host, error) {
 // to stop on Close hangs off ctx, so background work cannot be added
 // without a parent that stops it.
 func wrap(h host.Host) *Host {
-	t := &Host{h: h}
+	t := &Host{h: h, relays: newRelaySet()}
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	return t
 }
@@ -272,11 +302,15 @@ func (t *Host) refreshMeasured(mine *socketRef, measured *atomic.Value) {
 // reservation left to be reached through. Neither is recovered by the
 // dial made at startup.
 //
+// It re-runs when the relay set is replaced, because a machine the
+// coordinator has just moved has a reservation to make and an address to
+// be observed at, and neither waits for the next tick.
+//
 // It re-runs on relayRetry as well, because a relay that restarts is a
 // change to nothing on this machine and so raises no event here. A round
 // costs one dial and a kilobyte per relay, and it is what puts a pair
 // back in touch after the machine between them was rebooted.
-func (t *Host) holdRelays(relays []peer.AddrInfo, observed *atomic.Value) {
+func (t *Host) holdRelays(observed *atomic.Value) {
 	tick := time.NewTicker(relayRetry)
 	defer tick.Stop()
 
@@ -292,11 +326,12 @@ func (t *Host) holdRelays(relays []peer.AddrInfo, observed *atomic.Value) {
 		changed = sub.Out()
 	}
 	for {
-		t.dialRelays(relays, observed, down)
+		t.dialRelays(t.relays.peers(), observed, down)
 		select {
 		case <-t.ctx.Done():
 			return
 		case <-tick.C:
+		case <-t.relays.changed:
 		case _, ok := <-changed:
 			if !ok {
 				return

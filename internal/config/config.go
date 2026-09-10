@@ -69,7 +69,16 @@ type Config struct {
 
 	// Relays are heimdall nodes, as full multiaddrs. Empty means LAN
 	// only, which is a complete and supported way to run.
+	//
+	// Set these or Coordinator, not both. These name the relay to use
+	// and never change; a coordinator hands one out and can change it.
 	Relays []string `json:"relays"`
+
+	// Coordinator is a bifrost node, as full multiaddrs — several for
+	// the same one are fine. A machine with a coordinator is told which
+	// relay to use and keeps asking, so the answer can change while it
+	// runs. Empty means the Relays above, or LAN only.
+	Coordinator []string `json:"coordinator,omitempty"`
 }
 
 // Default is what a first run writes: no relays, so LAN only.
