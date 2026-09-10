@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/achmadss/p2p-transport/internal/config"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // isolate points the config package at a fresh directory, so a test
@@ -133,4 +134,46 @@ func TestFingerprintIsShortAndDerivedFromTheID(t *testing.T) {
 	if !strings.HasSuffix(id.ID().String(), strings.ReplaceAll(fp, "-", "")) {
 		t.Fatalf("fingerprint %q does not come from peer id %s", fp, id.ID())
 	}
+}
+
+// The whole point of an ephemeral key: nothing is left on disk, so a
+// disk image of this machine carries no identity into its clones. Two of
+// them sharing one peer id would look like one machine to everything
+// that dials either.
+func TestEphemeralLeavesNothingBehind(t *testing.T) {
+	dir := isolate(t)
+
+	first, err := Ephemeral()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Ephemeral()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID() == second.ID() {
+		t.Fatal("two ephemeral identities share a peer id")
+	}
+	if first.ID().String() == "" || first.ID() != peerIDOf(t, first) {
+		t.Fatal("the peer id does not come from the key")
+	}
+
+	left, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range left {
+		t.Fatalf("ephemeral wrote %s", e.Name())
+	}
+}
+
+// peerIDOf derives the id again from the key, so the test proves the
+// pairing rather than trusting the field.
+func peerIDOf(t *testing.T, i *Identity) peer.ID {
+	t.Helper()
+	id, err := peer.IDFromPrivateKey(i.PrivateKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

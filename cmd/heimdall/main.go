@@ -57,7 +57,9 @@ func main() {
 		fmt.Print(`usage: heimdall
 
 environment (empty means the default):
-  RATATOSKR_CONFIG_DIR       where identity.key lives
+  RATATOSKR_CONFIG_DIR       where identity.key lives. Only read when
+                             HEIMDALL_BIFROST is unset: a relay in a
+                             fleet keeps no key and needs no disk.
   HEIMDALL_PORT              listen port, UDP and TCP          (4001)
                              TCP 443 is answered as well when the
                              process may bind it, for networks that
@@ -98,7 +100,28 @@ environment (empty means the default):
 }
 
 func run() error {
+	// With a coordinator, the relay is closed: it carries the machines
+	// bifrost places here and refuses everyone else. Without one, it is
+	// open to anyone holding its address, which is how a single relay
+	// run by hand has always worked.
+	coord, err := config.Multiaddrs("HEIMDALL_BIFROST")
+	if err != nil {
+		return err
+	}
+
+	// A relay in a fleet keeps no key. It tells the coordinator its
+	// address on every reconnection, and the machines using it are given
+	// that address by the coordinator, so nobody anywhere remembers the
+	// old peer id and a fresh one each boot costs nothing. That leaves
+	// the machine with no state to keep and, more to the point, no key
+	// to strip out of a disk image before cloning it.
+	//
+	// A relay run by hand is named in someone's config.json, so its id
+	// has to survive a restart and it keeps the file.
 	id, err := identity.LoadOrCreate("")
+	if len(coord) > 0 {
+		id, err = identity.Ephemeral()
+	}
 	if err != nil {
 		return err
 	}
@@ -133,14 +156,6 @@ func run() error {
 	}
 	defer h.Close()
 
-	// With a coordinator, the relay is closed: it carries the machines
-	// bifrost places here and refuses everyone else. Without one, it is
-	// open to anyone holding its address, which is how a single relay
-	// run by hand has always worked.
-	coord, err := config.Multiaddrs("HEIMDALL_BIFROST")
-	if err != nil {
-		return err
-	}
 	// relayHost is what the relay is built on: the host itself when
 	// there is no coordinator, and a shaped view of it when there is.
 	relayHost := host.Host(h)

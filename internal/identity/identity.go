@@ -79,10 +79,47 @@ func LoadOrCreate(dir string) (*Identity, error) {
 	}
 }
 
-func create(path string) (*Identity, error) {
+// Ephemeral generates an identity and writes nothing.
+//
+// It is for a process whose peer id nobody remembers: a relay in a fleet
+// tells the coordinator its address every time it reconnects, and the
+// machines using it are given that address by the coordinator rather
+// than from a file, so a new id on every boot costs nothing. What it
+// buys is a machine with no state at all — no disk to keep, and nothing
+// to strip out of a disk image before cloning it, which is the trap
+// every clone-based provider sets.
+//
+// A process whose address someone else holds — the coordinator, or a
+// relay run by hand and named in a config file — needs LoadOrCreate
+// instead, or that address stops naming it after a restart.
+func Ephemeral() (*Identity, error) {
+	priv, err := generate()
+	if err != nil {
+		return nil, err
+	}
+	return fromKey(priv)
+}
+
+func generate() (crypto.PrivKey, error) {
 	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate key: %w", err)
+	}
+	return priv, nil
+}
+
+func fromKey(priv crypto.PrivKey) (*Identity, error) {
+	id, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("derive peer id: %w", err)
+	}
+	return &Identity{priv: priv, id: id}, nil
+}
+
+func create(path string) (*Identity, error) {
+	priv, err := generate()
+	if err != nil {
+		return nil, err
 	}
 	b, err := crypto.MarshalPrivateKey(priv)
 	if err != nil {
@@ -91,11 +128,7 @@ func create(path string) (*Identity, error) {
 	if err := os.WriteFile(path, b, keyPerm); err != nil {
 		return nil, fmt.Errorf("write %s: %w", path, err)
 	}
-	id, err := peer.IDFromPrivateKey(priv)
-	if err != nil {
-		return nil, fmt.Errorf("derive peer id: %w", err)
-	}
-	return &Identity{priv: priv, id: id}, nil
+	return fromKey(priv)
 }
 
 // fromBytes fails loudly rather than regenerating. A key file that does
@@ -109,11 +142,11 @@ func fromBytes(b []byte, path string) (*Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a valid key: %w", path, err)
 	}
-	id, err := peer.IDFromPrivateKey(priv)
+	i, err := fromKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("derive peer id from %s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return &Identity{priv: priv, id: id}, nil
+	return i, nil
 }
 
 // checkPerm refuses to start when the private key is readable by anyone

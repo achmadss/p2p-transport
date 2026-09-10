@@ -91,7 +91,7 @@ notebook had in common.
 
 | Variable | Effect |
 |---|---|
-| `RATATOSKR_CONFIG_DIR` | Where state lives. Set it to run two agents on one machine; the tests rely on it. |
+| `RATATOSKR_CONFIG_DIR` | Where state lives. Set it to run two agents on one machine; the tests rely on it. A relay with `HEIMDALL_BIFROST` set reads nothing from it. |
 | `RATATOSKR_NO_MDNS` | Start without opening a multicast socket, for a network or an endpoint agent that objects to one. It is not armour — see **Commands**. |
 | `RATATOSKR_DIAG` | Print everything below the seam. The one exception to the seam rule. |
 | `RATATOSKR_ASSUME_PUBLIC` | Skip the forced relay reservation on a machine that really is reachable. |
@@ -312,6 +312,19 @@ renewed on a draining relay anyway when nowhere else has room — emptying
 a relay is worth waiting for and leaving a machine unreachable is not.
 Creating and destroying the VPS is the operator's; `FLEET.md` §6.5 says
 what is built and what is not.
+
+**A relay in a fleet keeps no key, and that is what makes it
+disposable.** `identity.Ephemeral` generates the keypair in memory and
+writes nothing, and heimdall picks it whenever `HEIMDALL_BIFROST` is
+set. Nothing anywhere remembers a relay's peer id: it sends its address
+on every reconnection and the coordinator is what machines ask, so a new
+id each boot changes nothing. What that buys is a relay with no disk to
+keep and no key to strip out of a disk image — which matters because the
+first provider adapter makes relays by cloning one, and a copied
+`identity.key` would give every relay in the fleet the same id. Bifrost
+still keeps its file: its address is the one fixed thing everything else
+is configured with. So does a relay run by hand with no coordinator,
+because that one is named in somebody's `config.json`.
 
 **Metering is those same reports added up.** There is no scrape and no
 second port on the relays: the numbers the allowance loop already needs

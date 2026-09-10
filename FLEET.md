@@ -698,6 +698,17 @@ and a `Spec` that carries `UserData` is refused rather than quietly
 stripped, because a relay that comes up without its coordinator is an
 orphan that bills and the loop would go on making more of them.
 
+A clone copies the whole disk, which is why a relay in a fleet keeps no
+key. `identity.LoadOrCreate` would have written `identity.key` into the
+source instance, every clone would have carried the same one, and every
+relay in the fleet would have answered to one peer id — which looks to
+everything that dials it like a single machine. With `HEIMDALL_BIFROST`
+set, heimdall calls `identity.Ephemeral` instead: the key is generated in
+memory and never written. Nothing remembers a relay's id — it registers
+its address on every reconnection and the coordinator hands that address
+out — so a fresh id each boot costs nothing, and there is no longer
+anything to strip out of a disk image before cloning it.
+
 A clone inherits the source's size and location, so `Spec.Size` and
 `Spec.Region` have nowhere to go. Rather than ignore them, `Sizes` and
 `Regions` each return exactly one value — the source's — read from
