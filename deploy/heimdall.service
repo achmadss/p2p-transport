@@ -1,0 +1,80 @@
+# A relay in a fleet. Disposable on purpose.
+#
+# With HEIMDALL_BIFROST set it keeps no key and writes nothing anywhere,
+# so there is no state directory here and ProtectSystem=strict has no
+# exception. That is what lets a whole machine be cloned: nothing on the
+# disk names this relay, so the copy is not a duplicate of it.
+#
+# It runs as a different user on every start, because it has nothing to
+# own between starts.
+#
+# Install:
+#   install -m755 heimdall-linux-amd64 /usr/local/bin/heimdall
+#   install -m644 heimdall.service /etc/systemd/system/heimdall.service
+#   systemctl daemon-reload && systemctl enable --now heimdall
+#   journalctl -u heimdall -n 20   <- wants "registered with the coordinator"
+
+[Unit]
+Description=heimdall, a relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+ExecStart=/usr/local/bin/heimdall
+
+# The coordinator's full address, peer id included. Copy it out of
+# bifrost's own startup output. Everything else about a fleet relay is
+# pushed down this connection.
+Environment=HEIMDALL_BIFROST=/ip4/CHANGE.ME/udp/4002/quic-v1/p2p/12D3CHANGEME
+
+# What this relay can forward, PER DIRECTION, in bytes per second.
+#
+# A relayed byte is read off one leg and written to the other, so it
+# crosses this machine twice: the provider's link speed is not this
+# number unless they already quote it per direction. Measure it on this
+# machine and put the measurement here. 50M is a placeholder, not a
+# reading.
+Environment=HEIMDALL_BANDWIDTH=50M
+
+Environment=HEIMDALL_PORT=4001
+
+# How often this relay tells the coordinator what each subject moved.
+# It is also the heartbeat, and the clock the rate division runs on.
+# The coordinator gives up on a relay after three of these, and never
+# sooner than fifteen seconds.
+Environment=HEIMDALL_REPORT_EVERY=1s
+
+# Set this only if the machine cannot see its own public address. It
+# replaces the whole advertised set, so a baked-in value would be wrong
+# on every clone — leave it out unless a clone genuinely needs it, and
+# then set it per machine.
+#Environment=HEIMDALL_ANNOUNCE=/ip4/1.2.3.4/udp/4001/quic-v1,/ip4/1.2.3.4/tcp/4001
+
+# heimdall also answers on TCP 443, for networks that pass 443 and drop
+# everything else. Binding it needs this capability; without it that one
+# listener silently does not come up and the others still do.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+Restart=always
+RestartSec=2s
+
+# One or more sockets per circuit, and a relay carries many.
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_NETLINK is not optional: Go asks the kernel over netlink to
+# enumerate this machine's interfaces, and without it there are no
+# addresses to listen on or advertise.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

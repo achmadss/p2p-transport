@@ -1,0 +1,84 @@
+#!/bin/sh
+# Hands-on access to the DEPA account, for the things a person does and
+# the scaling loop does not: look at what is there, clone the prepared
+# relay once by hand, and clean up after a test.
+#
+#   export DEPA_API_KEY=...
+#   deploy/depa relays                     what the fleet owns
+#   deploy/depa all                        every machine in the account
+#   deploy/depa detail <uuid>
+#   deploy/depa clone <source-uuid> <key>  makes heimdall-<key>
+#   deploy/depa destroy <uuid>
+#
+# Needs curl and jq. The prefix must match the adapter's, because that
+# prefix is the whole of what the fleet claims to own.
+
+set -eu
+
+: "${DEPA_API_KEY:?set DEPA_API_KEY}"
+BASE=${DEPA_BASE:-https://api.depa.id/v1}
+PREFIX=${DEPA_PREFIX:-heimdall-}
+
+api() {
+	method=$1
+	path=$2
+	shift 2
+	curl -sS -X "$method" "$BASE$path" \
+		-H "x-apikey: $DEPA_API_KEY" \
+		-H "Accept: application/json" \
+		-H "Content-Type: application/json" \
+		"$@"
+}
+
+# rows prints every instance in the account, one JSON object per line,
+# following the paging rather than trusting one page to hold everything.
+rows() {
+	page=1
+	while :; do
+		body=$(api GET "/instance?limit=100&page=$page")
+		echo "$body" | jq -c '.data.data[]?'
+		total=$(echo "$body" | jq -r '.data.page.total_pages // 0')
+		page=$((page + 1))
+		[ "$page" -gt "$total" ] && break
+	done
+}
+
+table() {
+	jq -r '[.uuid, .hostname, .status, (.ip_address // "-"), .cost] | @tsv' |
+		sort -k2 |
+		awk 'BEGIN { printf "%-38s %-24s %-10s %-16s %s\n", "UUID", "HOSTNAME", "STATUS", "IP", "COST" }
+		     { printf "%-38s %-24s %-10s %-16s %s\n", $1, $2, $3, $4, $5 }'
+}
+
+cmd=${1:-relays}
+case $cmd in
+relays)
+	rows | jq -c --arg p "$PREFIX" 'select(.hostname | startswith($p))' | table
+	;;
+all)
+	rows | table
+	;;
+detail)
+	api GET "/instance/${2:?uuid}/detail" | jq .
+	;;
+clone)
+	src=${2:?source uuid}
+	key=${3:?key}
+	# The same check the adapter makes. A key that is not a legal
+	# hostname cannot be read back off one.
+	echo "$key" | grep -Eq '^[a-z0-9-]{1,40}$' ||
+		{ echo "key must be 1-40 of a-z 0-9 and -" >&2; exit 1; }
+	rows | jq -e --arg h "$PREFIX$key" 'select(.hostname == $h)' >/dev/null 2>&1 &&
+		{ echo "$PREFIX$key already exists" >&2; exit 1; }
+	api POST "/instance/$src/clone" -d "{\"hostname\":\"$PREFIX$key\"}" | jq .
+	;;
+destroy)
+	api DELETE "/instance/${2:?uuid}" \
+		-H "_method: DELETE" \
+		-d '{"remove_ip":true,"remove_block_storage":true}' | jq .
+	;;
+*)
+	echo "usage: depa relays|all|detail <uuid>|clone <src> <key>|destroy <uuid>" >&2
+	exit 2
+	;;
+esac

@@ -1,0 +1,64 @@
+# The relay coordinator. One of these, made by hand, kept for ever.
+#
+# It is the one machine in the fleet with state that matters. identity.key
+# gives it the peer id every relay and every agent is configured with, so
+# losing it means reconfiguring all of them; subjects.json is who is
+# allowed what; usage.json is what everyone moved. Back up /var/lib/bifrost.
+#
+# Install:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin bifrost
+#   install -m755 bifrost-linux-amd64 /usr/local/bin/bifrost
+#   install -m644 bifrost.service /etc/systemd/system/bifrost.service
+#   systemctl daemon-reload && systemctl enable --now bifrost
+#   journalctl -u bifrost -n 20     <- copy the multiaddr it prints
+
+[Unit]
+Description=bifrost, the relay coordinator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bifrost
+Group=bifrost
+ExecStart=/usr/local/bin/bifrost
+
+# StateDirectory creates /var/lib/bifrost owned by this user. 0700 because
+# identity.key lives in it and a 0600 file in a listable directory is not
+# private enough.
+StateDirectory=bifrost
+StateDirectoryMode=0700
+Environment=RATATOSKR_CONFIG_DIR=/var/lib/bifrost
+
+Environment=BIFROST_PORT=4002
+
+# The admin API has no authentication of any kind. Loopback only, and
+# reach it over an SSH tunnel:
+#   ssh -N -L 4080:127.0.0.1:4080 root@<this machine>
+Environment=BIFROST_ADMIN=127.0.0.1:4080
+
+# Set this only if the machine cannot see its own public address. On a
+# provider that puts the public IP straight on the interface, leave it
+# out and let bifrost report what it sees.
+#Environment=BIFROST_ANNOUNCE=/ip4/1.2.3.4/udp/4002/quic-v1,/ip4/1.2.3.4/tcp/4002
+
+Restart=always
+RestartSec=2s
+
+# One connection per relay and per agent, each on more than one socket.
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_NETLINK is not optional: Go asks the kernel over netlink to
+# enumerate this machine's interfaces, and without it there are no
+# addresses to listen on or advertise.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

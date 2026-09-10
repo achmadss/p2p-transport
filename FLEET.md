@@ -759,9 +759,21 @@ no timezone in either of the two formats it comes in, which is why
 `Machine.Created` is left zero. And `GET /v1/tiers`, which the docs
 describe, redirects to the documentation site instead of answering — a
 reminder that the documentation and the API have drifted, and a reason
-this adapter calls as few endpoints as it can. Cloning, destroying and
-the `search` parameter's exact behaviour are still unchecked, the last of
-those now permanently, since nothing here uses it.
+this adapter calls as few endpoints as it can. The `search` parameter's behaviour is
+unchecked and now permanently so, since nothing here uses it.
+
+The rest was checked the same day, against the same account, by running
+the adapter itself: `internal/provision/depa`'s live tests cloned a
+machine, asked for it a second time under the same key, listed it and
+destroyed it. The whole round trip took 62 seconds and left nothing
+behind. Three things came out of it. A **stopped** instance can be
+cloned, which matters because the prepared relay is meant to sit stopped
+between clones. A clone gets its own public address rather than
+inheriting the source's, so nothing about the source's networking is
+copied into it. And a rejected API key comes back as HTTP 400
+`TOKEN_NOT_FOUND` rather than a 401 or a 403 — which lands in the fatal
+bucket, correctly: a coordinator configured with a bad key must stop and
+say so, not retry for ever.
 
 `ErrNoCapacity` is never returned. DEPA documents no error catalogue, so
 the adapter classifies on HTTP status alone: 429 and 5xx are

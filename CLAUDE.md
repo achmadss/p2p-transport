@@ -360,7 +360,10 @@ one and `Create` lists before it clones; and it publishes no bandwidth
 figure anywhere, so `Size.Bandwidth` is measured on a real machine and
 passed in, and the client refuses to exist without it. None of those
 three facts reached the interface, which is the whole point of having
-one.
+one. `deploy/` holds the systemd units for both servers and a shell
+front end to the same account, and the adapter's live tests — behind a
+`live` build tag, so they never run in the normal suite — clone a real
+machine and destroy it again when `DEPA_LIVE_CLONE` is set.
 
 ## Traps
 
