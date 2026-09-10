@@ -28,6 +28,23 @@ make cross            # dist/bifrost-linux-amd64, dist/heimdall-linux-amd64
 `CGO_ENABLED=0` is set in the Makefile, so these are static binaries and
 the target needs nothing installed on it.
 
+No provider API can put a program on a machine, so installing is a
+separate step over ssh, and `deploy/install` is it:
+
+```
+deploy/install bifrost  root@<coordinator>
+deploy/install heimdall root@<relay source> root@<coordinator>
+```
+
+The second reads the coordinator's address out of the coordinator's own
+log rather than asking for it. That address is printed there at startup,
+it is the only place it is certainly right, and a peer id copied by hand
+is a peer id one character wrong. Both keep one ssh connection open for
+the whole run, so a machine with no key asks for its password once.
+
+What follows is what those two do, for when something needs doing by
+hand.
+
 ## The coordinator, once
 
 Its address is the one fixed thing every relay and every agent is

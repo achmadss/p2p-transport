@@ -181,17 +181,18 @@ create)
 	echo
 	cat >&2 <<NEXT
 
-Both machines are bare Ubuntu. Nothing is installed on them yet.
+Both machines are bare Ubuntu. Nothing is installed on them yet: no
+provider API can put a program on a machine, so that half goes over ssh.
 
-  1. Install the coordinator on $BIFROST_HOST, and copy the multiaddr it
-     prints out of its log.
-  2. Install a relay on $SOURCE_HOST with that address in
-     HEIMDALL_BIFROST, watch it say "registered with the coordinator",
-     then measure what it forwards and put that in HEIMDALL_BANDWIDTH.
-  3. Stop $SOURCE_HOST. It is now the image, and its uuid is what the
-     coordinator clones.
+  deploy/install bifrost  root@<$BIFROST_HOST address>
+  deploy/install heimdall root@<$SOURCE_HOST address> root@<$BIFROST_HOST address>
 
-deploy/README.md has the commands for 1 and 2.
+The second one reads the coordinator's address out of the coordinator's
+own log, so there is no peer id to copy by hand.
+
+Then measure what $SOURCE_HOST forwards per direction, put it in
+HEIMDALL_BANDWIDTH, and stop the machine. It is the image now, and its
+uuid is what the coordinator clones.
 NEXT
 	;;
 *)

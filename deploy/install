@@ -1,0 +1,145 @@
+#!/bin/sh
+# Put the software on the machines bootstrap bought.
+#
+#   deploy/install bifrost  root@1.2.3.4
+#   deploy/install heimdall root@5.6.7.8 root@1.2.3.4
+#
+# bootstrap talks to the provider's API, and no provider API can install
+# a program. This is the other half, over ssh.
+#
+# Installing the relay needs the coordinator's address, and rather than
+# ask for it this reads it out of the coordinator's own log: it is
+# printed there at startup, it is the only place it is certainly right,
+# and copying it by hand is how a peer id ends up one character wrong.
+#
+# ssh keys are worth setting up first. Without one, every machine asks
+# for its password once — the connection is reused for the whole run.
+
+set -eu
+
+usage() {
+	cat >&2 <<'USAGE'
+usage: install bifrost  <ssh-target>
+       install heimdall <ssh-target> <coordinator ssh-target | multiaddr>
+
+environment:
+  HEIMDALL_BANDWIDTH   what a relay claims it can forward, per
+                       direction. A placeholder until measured.   (50M)
+  HEIMDALL_REPORT_EVERY                                            (1s)
+USAGE
+	exit 2
+}
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(dirname "$here")
+
+# One authentication for the whole run, however many times ssh is used.
+ctl=$(mktemp -u "${TMPDIR:-/tmp}/install-ssh.XXXXXX")
+SSHOPTS="-o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=120 -o StrictHostKeyChecking=accept-new"
+cleanup() { ssh $SSHOPTS -O exit "$TARGET" 2>/dev/null || true; }
+
+sh_on() { # sh_on <target> [args...] <script on stdin>
+	t=$1
+	shift
+	# Each argument is quoted for the remote shell. They are addresses and
+	# sizes today, but a value that reached the far side split in two
+	# would be a very quiet way to misconfigure a machine.
+	q=
+	for a in "$@"; do q="$q '$a'"; done
+	ssh $SSHOPTS "$t" "sh -s --$q"
+}
+
+need() {
+	[ -f "$root/dist/$1" ] && return 0
+	echo "building $1" >&2
+	(cd "$root" && make cross >/dev/null)
+	[ -f "$root/dist/$1" ] || { echo "install: no $root/dist/$1" >&2; exit 1; }
+}
+
+# multiaddr_of pulls the coordinator's address out of its own log and
+# keeps only the ones a machine somewhere else can dial: QUIC, and a
+# genuinely routable address rather than loopback or a private range.
+multiaddr_of() {
+	ssh $SSHOPTS "$1" 'journalctl -u bifrost -n 200 --no-pager' |
+		grep -oE '/ip4/[0-9.]+/udp/[0-9]+/quic-v1/p2p/[A-Za-z0-9]+' |
+		grep -vE '/ip4/(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|0\.)' |
+		head -n1
+}
+
+case ${1:-} in
+bifrost)
+	TARGET=${2:?ssh target}
+	trap cleanup EXIT
+	need bifrost-linux-amd64
+	scp $SSHOPTS "$root/dist/bifrost-linux-amd64" "$here/bifrost.service" "$TARGET:/tmp/" >/dev/null
+	sh_on "$TARGET" <<'REMOTE'
+set -eu
+id -u bifrost >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin bifrost
+install -m755 /tmp/bifrost-linux-amd64 /usr/local/bin/bifrost
+install -m644 /tmp/bifrost.service /etc/systemd/system/bifrost.service
+rm -f /tmp/bifrost-linux-amd64 /tmp/bifrost.service
+systemctl daemon-reload
+systemctl enable --now bifrost
+systemctl restart bifrost
+REMOTE
+	# The unit is Restart=always, so a crash loop looks like a running
+	# service from systemd's point of view. The log is the check.
+	sleep 5
+	addr=$(multiaddr_of "$TARGET")
+	[ -n "$addr" ] || {
+		echo "install: bifrost did not print an address it can be reached at. Its log says:" >&2
+		ssh $SSHOPTS "$TARGET" 'journalctl -u bifrost -n 30 --no-pager' >&2
+		exit 1
+	}
+	echo "coordinator is up:"
+	echo "  $addr"
+	echo
+	echo "next: deploy/install heimdall <relay ssh-target> $TARGET"
+	;;
+
+heimdall)
+	TARGET=${2:?ssh target}
+	from=${3:?coordinator ssh-target or multiaddr}
+	trap cleanup EXIT
+	case $from in
+	/ip4/*) addr=$from ;;
+	*) addr=$(multiaddr_of "$from") ;;
+	esac
+	[ -n "$addr" ] || { echo "install: no coordinator address; is bifrost running on $from?" >&2; exit 1; }
+
+	need heimdall-linux-amd64
+	scp $SSHOPTS "$root/dist/heimdall-linux-amd64" "$here/heimdall.service" "$TARGET:/tmp/" >/dev/null
+	sh_on "$TARGET" <<'REMOTE' "$addr" "${HEIMDALL_BANDWIDTH:-50M}" "${HEIMDALL_REPORT_EVERY:-1s}"
+set -eu
+install -m755 /tmp/heimdall-linux-amd64 /usr/local/bin/heimdall
+install -m644 /tmp/heimdall.service /etc/systemd/system/heimdall.service
+rm -f /tmp/heimdall-linux-amd64 /tmp/heimdall.service
+# A drop-in rather than an edit, so the unit on disk stays the one in the
+# repository and what this machine was told is in one small file.
+mkdir -p /etc/systemd/system/heimdall.service.d
+cat >/etc/systemd/system/heimdall.service.d/fleet.conf <<CONF
+[Service]
+Environment=HEIMDALL_BIFROST=$1
+Environment=HEIMDALL_BANDWIDTH=$2
+Environment=HEIMDALL_REPORT_EVERY=$3
+CONF
+systemctl daemon-reload
+systemctl enable --now heimdall
+systemctl restart heimdall
+REMOTE
+	sleep 5
+	if ssh $SSHOPTS "$TARGET" 'journalctl -u heimdall -n 50 --no-pager' | grep -q 'registered with the coordinator'; then
+		echo "relay registered with $addr"
+		echo
+		echo "next: measure what this machine forwards per direction, put it in"
+		echo "HEIMDALL_BANDWIDTH, then stop the machine. It is the image now."
+	else
+		echo "install: the relay did not register. Its log says:" >&2
+		ssh $SSHOPTS "$TARGET" 'journalctl -u heimdall -n 30 --no-pager' >&2
+		exit 1
+	fi
+	;;
+*)
+	usage
+	;;
+esac
