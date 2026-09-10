@@ -72,6 +72,13 @@ func (r *relaySet) gone(id peer.ID) {
 
 // set replaces the relays, and reports whether they actually differ.
 func (r *relaySet) set(infos []peer.AddrInfo) bool {
+	// One relay answers on several transports and is named once per
+	// address, so the addresses are folded together first. Left apart,
+	// one relay looks like four machines with one address each, and
+	// whatever asks for a single candidate gets one address rather than
+	// one relay.
+	infos = group(infos)
+
 	circuits := make([]multiaddr.Multiaddr, 0, len(infos))
 	for _, info := range infos {
 		for _, a := range p2pAddrs(info) {
@@ -136,20 +143,35 @@ func render(as []multiaddr.Multiaddr) string {
 	return strings.Join(out, " ")
 }
 
+// group folds the addresses of each machine into one record, keeping the
+// order the machines first appeared in.
+func group(infos []peer.AddrInfo) []peer.AddrInfo {
+	out := make([]peer.AddrInfo, 0, len(infos))
+	at := map[peer.ID]int{}
+	for _, info := range infos {
+		i, seen := at[info.ID]
+		if !seen {
+			at[info.ID] = len(out)
+			out = append(out, peer.AddrInfo{ID: info.ID})
+			i = len(out) - 1
+		}
+		out[i].Addrs = append(out[i].Addrs, info.Addrs...)
+	}
+	return out
+}
+
 // mergeInfos folds several addresses for one machine into a single
 // record, so a coordinator listed twice — once for each transport it
 // answers on — is dialled as one machine with two ways in rather than
-// two machines.
+// two machines. More than one machine is a mistake in the configuration
+// and is refused.
 func mergeInfos(infos []peer.AddrInfo) (peer.AddrInfo, error) {
-	out := peer.AddrInfo{ID: infos[0].ID}
-	for _, info := range infos {
-		if info.ID != out.ID {
-			return peer.AddrInfo{}, fmt.Errorf("addresses name two different machines, %s and %s",
-				identity.Short(out.ID.String()), identity.Short(info.ID.String()))
-		}
-		out.Addrs = append(out.Addrs, info.Addrs...)
+	g := group(infos)
+	if len(g) != 1 {
+		return peer.AddrInfo{}, fmt.Errorf("addresses name two different machines, %s and %s",
+			identity.Short(g[0].ID.String()), identity.Short(g[1].ID.String()))
 	}
-	return out, nil
+	return g[0], nil
 }
 
 // leaseTTLFallback is how long a lease lasts when the coordinator did

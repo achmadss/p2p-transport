@@ -48,11 +48,12 @@ func burstFor(rate int64) int {
 //
 // It is the same object the coordinator pushes into and the byte path
 // reads out of, so a rate changed while a transfer runs changes that
-// transfer: the bucket is replaced under the readers already waiting on
-// it, and they pick the new one up on their next read.
+// transfer: the bucket is retuned rather than replaced, and the readers
+// already waiting on it wait by the new rate.
 type Limits struct {
 	mu      sync.RWMutex
-	subject map[peer.ID]string       // which subject a machine belongs to
+	subject map[peer.ID]string       // machines the coordinator placed here
+	via     map[peer.ID]peer.ID      // machines dialling in, and the placed machine they reached
 	bucket  map[string]*rate.Limiter // one per subject
 	total   *rate.Limiter            // the relay's own ceiling
 }
@@ -61,7 +62,11 @@ type Limits struct {
 // second. A total of zero means no ceiling of its own, which is only
 // sensible in a test.
 func New(total int64) *Limits {
-	l := &Limits{subject: map[peer.ID]string{}, bucket: map[string]*rate.Limiter{}}
+	l := &Limits{
+		subject: map[peer.ID]string{},
+		via:     map[peer.ID]peer.ID{},
+		bucket:  map[string]*rate.Limiter{},
+	}
 	if total > 0 {
 		l.total = rate.NewLimiter(rate.Limit(total), burstFor(total))
 	}
@@ -75,7 +80,42 @@ func (l *Limits) Admit(p peer.ID, subject string, max int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.subject[p] = subject
-	if _, ok := l.bucket[subject]; !ok && max > 0 {
+	delete(l.via, p)
+	l.tune(subject, max)
+}
+
+// Attach charges a machine dialling in to the subject it is reaching.
+//
+// Only one end of a circuit is placed here: the machine holding the
+// reservation. The other end dials in from wherever it is, belongs to no
+// subject on this relay, and carries the bytes travelling towards the
+// placed machine — its downloads. Without this those bytes would meet
+// nothing but the relay's own ceiling.
+func (l *Limits) Attach(src, dst peer.ID) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, own := l.subject[src]; !own {
+		l.via[src] = dst
+	}
+}
+
+// tune points a subject's bucket at max, creating it on the first
+// machine and dropping it when max says there is no limit. An existing
+// bucket is retuned rather than replaced, which is what lets a rate
+// change reach a transfer already running. The caller holds the lock.
+func (l *Limits) tune(subject string, max int64) {
+	b, ok := l.bucket[subject]
+	switch {
+	case max <= 0:
+		// No limit rather than no bandwidth. A limiter set to zero
+		// hands out its burst and then refuses every wait, which the
+		// byte path reads as "do not shape" — the opposite of what a
+		// zero would mean.
+		delete(l.bucket, subject)
+	case ok:
+		b.SetLimit(rate.Limit(max))
+		b.SetBurst(burstFor(max))
+	default:
 		l.bucket[subject] = rate.NewLimiter(rate.Limit(max), burstFor(max))
 	}
 }
@@ -90,6 +130,11 @@ func (l *Limits) Revoke(p peer.ID) {
 		return
 	}
 	delete(l.subject, p)
+	for src, dst := range l.via {
+		if dst == p {
+			delete(l.via, src)
+		}
+	}
 	for _, s := range l.subject {
 		if s == subject {
 			return
@@ -105,30 +150,26 @@ func (l *Limits) Revoke(p peer.ID) {
 func (l *Limits) SetLimit(subject string, max int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b, ok := l.bucket[subject]
-	if !ok {
-		if max > 0 {
-			l.bucket[subject] = rate.NewLimiter(rate.Limit(max), burstFor(max))
-		}
-		return
+	l.tune(subject, max)
+}
+
+// subjectOf is the subject a machine's bytes belong to: its own, or the
+// one it dialled in to reach. The caller holds the lock.
+func (l *Limits) subjectOf(p peer.ID) string {
+	if s, ok := l.subject[p]; ok {
+		return s
 	}
-	b.SetLimit(rate.Limit(max))
-	b.SetBurst(burstFor(max))
+	return l.subject[l.via[p]]
 }
 
 // bucketFor returns the limiters a machine's bytes pass through: its
-// subject's, if it has one, and the relay's own.
-func (l *Limits) bucketFor(p peer.ID) []*rate.Limiter {
+// subject's, nil when nothing is shaping it, and the relay's own. Two
+// returns rather than a slice because this is the byte path, and a
+// slice here is an allocation on every read.
+func (l *Limits) bucketFor(p peer.ID) (subject, total *rate.Limiter) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	var out []*rate.Limiter
-	if b, ok := l.bucket[l.subject[p]]; ok {
-		out = append(out, b)
-	}
-	if l.total != nil {
-		out = append(out, l.total)
-	}
-	return out
+	return l.bucket[l.subjectOf(p)], l.total
 }
 
 // RateFor is the rate a machine's subject may reach, in bytes per
@@ -138,7 +179,7 @@ func (l *Limits) bucketFor(p peer.ID) []*rate.Limiter {
 func (l *Limits) RateFor(p peer.ID) int64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	b, ok := l.bucket[l.subject[p]]
+	b, ok := l.bucket[l.subjectOf(p)]
 	if !ok {
 		return 0
 	}
@@ -171,16 +212,20 @@ type shaped struct {
 // applies to the rest of it.
 func (s shaped) Read(p []byte) (int, error) {
 	n, err := s.Stream.Read(p)
-	for _, b := range s.limits.bucketFor(s.who) {
-		pay(b, n)
-	}
+	subject, total := s.limits.bucketFor(s.who)
+	pay(subject, n)
+	pay(total, n)
 	return n, err
 }
 
 // pay waits out n bytes, in pieces no larger than the bucket can hold.
 // A single wait for more than the burst never returns, so a caller
-// reading with a buffer bigger than the burst would stall for ever.
+// reading with a buffer bigger than the burst would stall for ever. A
+// nil bucket is no limit and costs nothing.
 func pay(b *rate.Limiter, n int) {
+	if b == nil {
+		return
+	}
 	for n > 0 {
 		take := n
 		if burst := b.Burst(); take > burst {

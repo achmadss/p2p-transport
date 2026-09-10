@@ -273,7 +273,10 @@ libp2p's relay. Reads are shaped and writes are not, on purpose: a
 forwarded byte is read from one leg and written to the other, so shaping
 reads charges it once. One bucket per subject and no per-circuit limit —
 equal division is the one split that wastes whatever a slow machine
-cannot use — with the relay's own ceiling underneath.
+cannot use — with the relay's own ceiling underneath. Only the machine
+holding the reservation belongs to a subject here, so `AllowConnect` is
+where the machine dialling in is tied to the subject it reached; without
+that tie a download would meet nothing but the ceiling.
 
 ## Traps
 

@@ -163,3 +163,42 @@ func (r recorder) Write(b []byte) (int, error) {
 	*r.into = append(*r.into, c)
 	return len(b), nil
 }
+
+// A relay that reconnects registers again before the old stream's reader
+// notices it died. The late drop must not take the new registration, or
+// the relay disappears the moment it comes back.
+func TestReconnectSurvivesTheOldStreamsDrop(t *testing.T) {
+	f := testFleet(t)
+	old := join(f, "a", 1000)
+	who := machine(t, f, "alice", 100)
+	if got := f.lease(who); len(got.Relay) == 0 {
+		t.Fatal("the machine was not placed to begin with")
+	}
+
+	fresh := join(f, "a", 1000) // the same relay, a new stream
+	f.drop(old)                 // the old reader finally notices
+
+	if f.relays[fresh.id] != fresh {
+		t.Fatal("the reconnected relay was dropped by the old stream")
+	}
+	if _, ok := f.placed[who]; !ok {
+		t.Fatal("the machines on the reconnected relay were dropped with it")
+	}
+}
+
+// Raising a floor while a machine sits on a relay must count against
+// that relay, or the coordinator oversells what it already placed.
+func TestRenewalRereadsTheFloor(t *testing.T) {
+	f := testFleet(t)
+	n := join(f, "a", 1000) // ceiling 595
+	who := machine(t, f, "alice", 100)
+	f.lease(who)
+
+	if err := f.store.set("alice", 500, 5000); err != nil {
+		t.Fatal(err)
+	}
+	f.lease(who)
+	if got := f.committed(n.id); got != 500 {
+		t.Fatalf("relay committed %d after the floor was raised to 500", got)
+	}
+}

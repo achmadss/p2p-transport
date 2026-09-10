@@ -5,7 +5,42 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
+	"golang.org/x/time/rate"
 )
+
+// bucket is the subject limiter a machine draws on, which is what most
+// of these tests are really asking about.
+func bucket(l *Limits, p peer.ID) *rate.Limiter {
+	b, _ := l.bucketFor(p)
+	return b
+}
+
+// Only one end of a circuit is placed here. The other dials in and
+// belongs to no subject, so without Attach every byte travelling towards
+// a placed machine — everything it downloads — would go unshaped.
+func TestDialledInMachinePaysTheSubjectItReaches(t *testing.T) {
+	l := New(0)
+	placed, caller := peer.ID("placed"), peer.ID("caller")
+	l.Admit(placed, "alice", 1000)
+
+	if bucket(l, caller) != nil {
+		t.Fatal("a machine nobody mentioned is already shaped")
+	}
+	l.Attach(caller, placed)
+	if bucket(l, caller) != bucket(l, placed) {
+		t.Fatal("bytes towards a placed machine miss its bucket, so its downloads are free")
+	}
+	if got := l.RateFor(caller); got != 1000 {
+		t.Fatalf("shaping the dialled-in machine at %d, want 1000", got)
+	}
+
+	// The tie goes when the machine it was tied to does, or the map
+	// grows one entry per caller for the life of the relay.
+	l.Revoke(placed)
+	if bucket(l, caller) != nil {
+		t.Fatal("the tie outlived the machine it pointed at")
+	}
+}
 
 // Every machine of one subject shares one bucket. Two machines that both
 // pull hard land near half each; a machine on a slow link takes what it
@@ -19,10 +54,10 @@ func TestOneBucketPerSubject(t *testing.T) {
 	l.Admit(slow, "alice", 1000)
 	l.Admit(stranger, "bob", 500)
 
-	if l.bucketFor(fast)[0] != l.bucketFor(slow)[0] {
+	if bucket(l, fast) != bucket(l, slow) {
 		t.Fatal("two machines of one subject are drawing on different buckets")
 	}
-	if l.bucketFor(fast)[0] == l.bucketFor(stranger)[0] {
+	if bucket(l, fast) == bucket(l, stranger) {
 		t.Fatal("two subjects are sharing one bucket")
 	}
 	if got := l.RateFor(fast); got != 1000 {
@@ -35,8 +70,8 @@ func TestOneBucketPerSubject(t *testing.T) {
 // nothing and costing it everything.
 func TestUnknownMachineMeetsTheCeiling(t *testing.T) {
 	l := New(1000)
-	if got := l.bucketFor(peer.ID("stranger")); len(got) != 1 || got[0] != l.total {
-		t.Fatalf("an unknown machine passes through %d limiters, want the relay ceiling", len(got))
+	if b, total := l.bucketFor(peer.ID("stranger")); b != nil || total != l.total {
+		t.Fatal("an unknown machine misses the relay ceiling, or is shaped by a subject it does not belong to")
 	}
 	if got := l.RateFor(peer.ID("stranger")); got != 0 {
 		t.Fatalf("an unknown machine has a subject rate of %d, want none", got)
@@ -50,10 +85,10 @@ func TestSetLimitKeepsTheBucket(t *testing.T) {
 	l := New(0)
 	who := peer.ID("who")
 	l.Admit(who, "alice", 1000)
-	before := l.bucketFor(who)[0]
+	before := bucket(l, who)
 
 	l.SetLimit("alice", 4000)
-	if after := l.bucketFor(who)[0]; after != before {
+	if after := bucket(l, who); after != before {
 		t.Fatal("changing the rate replaced the bucket, so a transfer already running would keep the old one")
 	}
 	if got := l.RateFor(who); got != 4000 {
@@ -89,14 +124,14 @@ func TestRateIsEnforced(t *testing.T) {
 	l.Admit(two, "alice", perSecond)
 
 	// The first burst is free, so it is spent before the clock starts.
-	pay(l.bucketFor(one)[0], l.bucketFor(one)[0].Burst())
+	pay(bucket(l, one), bucket(l, one).Burst())
 
 	start := time.Now()
 	done := make(chan struct{}, 2)
 	for _, who := range []peer.ID{one, two} {
 		go func() {
 			for range 10 {
-				pay(l.bucketFor(who)[0], perSecond/10)
+				pay(bucket(l, who), perSecond/10)
 			}
 			done <- struct{}{}
 		}()

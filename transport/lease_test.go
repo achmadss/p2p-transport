@@ -9,6 +9,7 @@ import (
 	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 // A relay address becomes something to dial a peer through, and the set
@@ -174,5 +175,35 @@ func TestRelayLossWakesTheLeaseLoop(t *testing.T) {
 	case <-set.lost:
 	default:
 		t.Fatal("the relay going away did not wake the lease loop")
+	}
+}
+
+// A relay answers on several transports and the coordinator names it
+// once per address. Kept apart, one relay looks like several machines
+// with one address each, and whatever asks for a single candidate gets
+// one address instead of one relay.
+func TestOneRelayWithManyAddressesStaysOneRelay(t *testing.T) {
+	h := newHost(t)
+	defer h.Close()
+
+	// One relay, listed once per transport it answers on, which is what
+	// the coordinator sends.
+	var apart []peer.AddrInfo
+	for _, a := range []string{"/ip4/10.0.0.1/udp/4001/quic-v1", "/ip4/10.0.0.1/tcp/4001", "/ip4/10.0.0.1/tcp/443"} {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		apart = append(apart, peer.AddrInfo{ID: h.ID(), Addrs: []multiaddr.Multiaddr{ma}})
+	}
+
+	set := newRelaySet()
+	set.set(apart)
+	got := set.peers()
+	if len(got) != 1 {
+		t.Fatalf("one relay came back as %d machines", len(got))
+	}
+	if len(got[0].Addrs) != len(apart) {
+		t.Fatalf("the merged relay kept %d of %d addresses", len(got[0].Addrs), len(apart))
 	}
 }

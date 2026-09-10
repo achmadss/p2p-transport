@@ -82,8 +82,17 @@ func (a *admitted) AllowReserve(p peer.ID, _ multiaddr.Multiaddr) bool { return 
 // here, whose subject the traffic belongs to, and whose reservation the
 // circuit runs through. The source is whoever it chose to talk to, and
 // deciding that is the destination's business, not the relay's.
-func (a *admitted) AllowConnect(_ peer.ID, _ multiaddr.Multiaddr, dest peer.ID) bool {
-	return a.has(dest)
+//
+// It is also the one moment this relay learns the two ends of a circuit,
+// so it is where the source is tied to the destination's subject. The
+// bytes flowing from the source are the destination's downloads and must
+// be charged to it; nothing later in the byte path knows that pairing.
+func (a *admitted) AllowConnect(src peer.ID, _ multiaddr.Multiaddr, dest peer.ID) bool {
+	if !a.has(dest) {
+		return false
+	}
+	a.limits.Attach(src, dest)
+	return true
 }
 
 // follow keeps one stream to the coordinator open for as long as the

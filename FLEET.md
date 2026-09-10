@@ -308,6 +308,16 @@ control window fills behind it, and the sender stops. The blocked time
 §4.2 wants is the same wait, measured; it is not recorded yet because
 nothing reads it until §5.
 
+Only one end of a circuit is a machine this relay was given. The other
+dials in from wherever it is, holds no reservation here and belongs to
+no subject, yet the bytes it sends are the placed machine's downloads
+and must be charged to it. The relay learns the pair at exactly one
+moment — the access list's `AllowConnect`, which is handed the source
+and the destination together — so that is where the source is tied to
+the destination's subject, and the tie is dropped when the destination
+is. Without it a download would meet nothing but the relay's own
+ceiling.
+
 The buckets live in `internal/shape`, keyed by subject, with the relay's
 own ceiling under them. `x/time/rate` is the bucket, it was already in
 the module, and `SetLimit` on a live limiter is what makes a rate change

@@ -154,9 +154,14 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 
 	f.mu.Lock()
 	// Renewal is the common case and must not move a working machine: a
-	// move costs it every live connection through that relay.
+	// move costs it every live connection through that relay. A machine
+	// moved to another subject is not a renewal: it is placed again, so
+	// the relay is told the subject it is now carrying.
 	if p, ok := f.placed[who]; ok {
-		if n, up := f.relays[p.relay]; up {
+		if n, up := f.relays[p.relay]; up && p.subject == id {
+			// The floor is re-read, so raising it counts against the
+			// relay's capacity without waiting for the machine to move.
+			p.min = sub.Min
 			p.expires = time.Now().Add(f.knobs.ttl)
 			addrs := n.addrs
 			f.mu.Unlock()
@@ -186,7 +191,7 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 		Subject: id,
 		Rate:    sub.Max,
 	}); err != nil {
-		f.drop(n.id)
+		f.drop(n)
 		return wire.Lease{TTL: f.knobs.ttl}
 	}
 	return wire.Lease{Relay: n.addrs, TTL: f.knobs.ttl}
@@ -194,12 +199,20 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 
 // drop forgets a relay and everything placed on it. The machines find
 // out by leasing again, which they do within half a TTL.
-func (f *fleet) drop(id peer.ID) {
+//
+// It drops the node rather than the id, and does nothing if that node is
+// no longer the registered one. A relay that reconnects registers again
+// before the old stream's reader notices it died, and dropping by id
+// would take the new registration and its placements with it.
+func (f *fleet) drop(n *relayNode) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.relays, id)
+	if f.relays[n.id] != n {
+		return
+	}
+	delete(f.relays, n.id)
 	for who, p := range f.placed {
-		if p.relay == id {
+		if p.relay == n.id {
 			delete(f.placed, who)
 		}
 	}
@@ -262,7 +275,7 @@ func (f *fleet) setLimit(subject string, max int64) {
 
 	for _, n := range carrying {
 		if err := n.push(wire.Command{Op: wire.OpSetLimit, Subject: subject, Rate: max}); err != nil {
-			f.drop(n.id)
+			f.drop(n)
 		}
 	}
 }
@@ -291,7 +304,7 @@ func (f *fleet) expire(now time.Time) {
 
 	for _, r := range out {
 		if err := r.n.push(wire.Command{Op: wire.OpRevoke, Peer: r.who}); err != nil {
-			f.drop(r.n.id)
+			f.drop(r.n)
 		}
 	}
 }
@@ -340,10 +353,10 @@ func (f *fleet) handleFleet(s network.Stream) {
 	}
 	s.SetReadDeadline(time.Time{})
 
-	f.register(id, reg, json.NewEncoder(s))
+	n := f.register(id, reg, json.NewEncoder(s))
 	fmt.Fprintf(os.Stderr, "relay %s registered, %d bytes/s per direction\n", id, reg.Bandwidth)
 	defer func() {
-		f.drop(id)
+		f.drop(n)
 		fmt.Fprintf(os.Stderr, "relay %s gone\n", id)
 	}()
 
