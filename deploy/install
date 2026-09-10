@@ -164,6 +164,59 @@ REMOTE
 	sleep 5
 	if ssh $SSHOPTS "$TARGET" 'journalctl -u heimdall -n 50 --no-pager' | grep -q 'registered with the coordinator'; then
 		echo "relay registered with $addr"
+		sh_on "$TARGET" <<'REMOTE'
+set -eu
+# This machine is going to be copied, so everything on it that names this
+# particular machine has to go. All three of these are silent failures:
+# the copy boots, the provider says Running, and something does not work.
+#
+# The network config is the one that stops everything. The installed
+# image pins the interface to a MAC address, a copy gets a new MAC, the
+# match fails, and the copy comes up with no network at all — not even
+# ssh. cloud-init will not rewrite it either, because it remembers having
+# run and a copy inherits that memory. So the pin is replaced with a
+# match on the name, and cloud-init is told to leave networking alone.
+#
+# The new file is generated and checked but not applied: the running
+# machine already has an address and applying a network change over the
+# connection carrying the change is how a machine is lost. It takes
+# effect on the copies, which is where it is needed.
+mkdir -p /etc/cloud/cloud.cfg.d
+printf 'network: {config: disabled}
+' >/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+for f in /etc/netplan/*.yaml; do [ -e "$f" ] && mv "$f" "$f.before-image"; done
+cat >/etc/netplan/10-any-ethernet.yaml <<'NET'
+network:
+  version: 2
+  ethernets:
+    anyeth:
+      match: {name: "eth*"}
+      dhcp4: true
+      optional: true
+    anyen:
+      match: {name: "en*"}
+      dhcp4: true
+      optional: true
+NET
+chmod 600 /etc/netplan/10-any-ethernet.yaml
+netplan generate
+
+# The machine id seeds the DHCP client identifier, so two copies sharing
+# one can be handed the same lease. Empty means systemd makes a new one
+# at boot.
+: >/etc/machine-id
+rm -f /var/lib/dbus/machine-id
+
+# Host keys identify the machine to ssh. sshd makes new ones at boot if
+# there are none, and copies presenting one identity is worth avoiding
+# even where nothing checks.
+rm -f /etc/ssh/ssh_host_*
+
+# cloud-init's memory of having run, which is what makes a copy skip its
+# own first boot.
+rm -rf /var/lib/cloud/instance /var/lib/cloud/instances
+REMOTE
+		echo "prepared as an image: no MAC pin, no machine id, no host keys"
 		echo
 		echo "next: measure what this machine forwards per direction, put it in"
 		echo "HEIMDALL_BANDWIDTH, then stop the machine. It is the image now."

@@ -740,6 +740,18 @@ lock on that door — nothing rebuilds it, so losing it is not an outage
 that heals but an afternoon with a fresh Ubuntu and the install notes.
 `deploy/bootstrap` makes those two and refuses a name that would collide.
 
+A machine also has to be *prepared* to be copied, and the preparation is
+not optional. DEPA's Ubuntu image pins the network interface to a MAC
+address in netplan, a clone gets a new MAC, the match fails, and the
+clone boots with no network at all — not even ssh, so there is nothing to
+log into and ask. cloud-init does not rewrite it, because a clone
+inherits its memory of having already run. `deploy/install` therefore
+replaces the pin with a match on the interface name, tells cloud-init to
+leave networking alone, and empties the machine id, the ssh host keys and
+cloud-init's instance record, all of which name one machine and would
+otherwise name several. Every one of those fails silently: the provider
+says Running and something simply does not work.
+
 **DEPA publishes no bandwidth figure anywhere** — not per tier, not per
 size, not per location, not as a monthly transfer allowance. So
 `Size.Bandwidth` comes from `Options.Bandwidth`, a number measured on a
@@ -780,9 +792,12 @@ cloned, which matters because the prepared relay is meant to sit stopped
 between clones. A clone gets its own public address rather than
 inheriting the source's, so nothing about the source's networking is
 copied into it. And a rejected API key comes back as HTTP 400
-`TOKEN_NOT_FOUND` rather than a 401 or a 403 — which lands in the fatal
-bucket, correctly: a coordinator configured with a bad key must stop and
-say so, not retry for ever.
+`TOKEN_NOT_FOUND` rather than a 401 or a 403 — as does a key whose scope
+does not cover the call, with `SCOPE_MISMATCH`. Both land in the fatal
+bucket, correctly: a coordinator whose key is wrong, or is read-only,
+must stop and say so rather than retry for ever. It is also why the
+classifier reads statuses rather than meanings — nothing about 400 says
+which of those it was, and guessing would be worse than the status.
 
 `ErrNoCapacity` is never returned. DEPA documents no error catalogue, so
 the adapter classifies on HTTP status alone: 429 and 5xx are
