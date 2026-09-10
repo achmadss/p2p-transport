@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"time"
@@ -90,6 +89,11 @@ type fleet struct {
 	mu     sync.Mutex
 	relays map[peer.ID]*relayNode
 	placed map[peer.ID]*placement
+
+	// shares is how much of each subject's rate each relay carrying it
+	// may use. One subject on two relays has two, and they are divided
+	// and re-divided by the allowance loop.
+	shares map[shareKey]*share
 }
 
 func newFleet(s *store, k knobs) *fleet {
@@ -98,6 +102,7 @@ func newFleet(s *store, k knobs) *fleet {
 		knobs:  k,
 		relays: map[peer.ID]*relayNode{},
 		placed: map[peer.ID]*placement{},
+		shares: map[shareKey]*share{},
 	}
 }
 
@@ -168,6 +173,10 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 			return wire.Lease{Relay: addrs, TTL: f.knobs.ttl}
 		}
 		delete(f.placed, who)
+		freed := f.forget(p.subject, p.relay)
+		if freed {
+			defer f.divide(p.subject)
+		}
 	}
 	n := f.pick(sub.Min)
 	if n == nil {
@@ -180,7 +189,15 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 		min:     sub.Min,
 		expires: time.Now().Add(f.knobs.ttl),
 	}
+	f.open(id, n.id, sub.Max)
 	f.mu.Unlock()
+
+	// Divided before the machine is admitted, so the relay is never told
+	// a rate that the subject's other relays have not been taken out of.
+	// This is what keeps the first period free of overshoot: the
+	// coordinator knows the circuit is about to exist because it is the
+	// one issuing the lease.
+	f.divide(id)
 
 	// Admit before answering, or the agent races its own lease: it
 	// would dial the relay and be refused by an access list that has
@@ -189,7 +206,7 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 		Op:      wire.OpAdmit,
 		Peer:    who.String(),
 		Subject: id,
-		Rate:    sub.Max,
+		Rate:    f.allotted(id, n.id),
 	}); err != nil {
 		f.drop(n)
 		return wire.Lease{TTL: f.knobs.ttl}
@@ -206,8 +223,8 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 // would take the new registration and its placements with it.
 func (f *fleet) drop(n *relayNode) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.relays[n.id] != n {
+		f.mu.Unlock()
 		return
 	}
 	delete(f.relays, n.id)
@@ -215,6 +232,20 @@ func (f *fleet) drop(n *relayNode) {
 		if p.relay == n.id {
 			delete(f.placed, who)
 		}
+	}
+	// Its shares go with it, so what it was holding is divided among the
+	// relays the subject still has.
+	var freed []string
+	for k := range f.shares {
+		if k.relay == n.id {
+			delete(f.shares, k)
+			freed = append(freed, k.subject)
+		}
+	}
+	f.mu.Unlock()
+
+	for _, subject := range freed {
+		f.divide(subject)
 	}
 }
 
@@ -254,32 +285,6 @@ func (f *fleet) register(id peer.ID, r wire.Register, enc *json.Encoder) *relayN
 	return n
 }
 
-// setLimit tells every relay carrying a subject that its rate has
-// changed. The relays apply it to the transfers already running, so a
-// plan changed while somebody is downloading changes that download.
-//
-// A relay that has gone is dropped rather than retried: the machines on
-// it will be placed again, and they will carry the new rate with them.
-func (f *fleet) setLimit(subject string, max int64) {
-	f.mu.Lock()
-	carrying := map[peer.ID]*relayNode{}
-	for _, p := range f.placed {
-		if p.subject != subject {
-			continue
-		}
-		if n, ok := f.relays[p.relay]; ok {
-			carrying[p.relay] = n
-		}
-	}
-	f.mu.Unlock()
-
-	for _, n := range carrying {
-		if err := n.push(wire.Command{Op: wire.OpSetLimit, Subject: subject, Rate: max}); err != nil {
-			f.drop(n)
-		}
-	}
-}
-
 // expire drops placements nobody renewed and tells the relay to stop
 // carrying them. Without it a machine that is switched off holds its
 // share of a relay for as long as the coordinator runs.
@@ -290,6 +295,7 @@ func (f *fleet) expire(now time.Time) {
 	}
 	var out []revocation
 
+	var freed []string
 	f.mu.Lock()
 	for who, p := range f.placed {
 		if now.Before(p.expires) {
@@ -299,9 +305,15 @@ func (f *fleet) expire(now time.Time) {
 		if n, ok := f.relays[p.relay]; ok {
 			out = append(out, revocation{n, who.String()})
 		}
+		if f.forget(p.subject, p.relay) {
+			freed = append(freed, p.subject)
+		}
 	}
 	f.mu.Unlock()
 
+	for _, subject := range freed {
+		f.divide(subject)
+	}
 	for _, r := range out {
 		if err := r.n.push(wire.Command{Op: wire.OpRevoke, Peer: r.who}); err != nil {
 			f.drop(r.n)
@@ -342,9 +354,12 @@ func (f *fleet) handleFleet(s network.Stream) {
 	defer s.Close()
 	id := s.Conn().RemotePeer()
 
+	// One decoder for the life of the stream. A second one would miss
+	// whatever the first had already read past the registration.
+	dec := json.NewDecoder(s)
 	var reg wire.Register
 	s.SetReadDeadline(time.Now().Add(10 * time.Second))
-	if err := json.NewDecoder(io.LimitReader(s, 1<<16)).Decode(&reg); err != nil {
+	if err := dec.Decode(&reg); err != nil {
 		return
 	}
 	if reg.Bandwidth <= 0 {
@@ -360,7 +375,13 @@ func (f *fleet) handleFleet(s network.Stream) {
 		fmt.Fprintf(os.Stderr, "relay %s gone\n", id)
 	}()
 
-	// The relay never sends again. This read is only how the stream's
-	// death is noticed.
-	io.Copy(io.Discard, s)
+	// The relay now reports its demand up this stream, once a period,
+	// and each report re-divides the subjects it names.
+	for {
+		var d wire.Demand
+		if err := dec.Decode(&d); err != nil {
+			return
+		}
+		f.report(id, d)
+	}
 }

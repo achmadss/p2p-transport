@@ -31,6 +31,12 @@ const (
 	defaultData     = 64 << 30
 	defaultDuration = time.Hour
 
+	// defaultReportEvery is how often this relay tells the coordinator
+	// what each subject moved. Shorter follows demand more closely and
+	// costs one small message per period; a second is a starting figure
+	// and the right one is measured, not assumed.
+	defaultReportEvery = time.Second
+
 	// defaultBandwidth is what this relay tells the coordinator it can
 	// forward, per direction. It is a starting figure and not a
 	// measurement: check what the provider actually sells, remember a
@@ -77,6 +83,11 @@ environment (empty means the default):
                              so this is not the provider's headline
                              number unless that number is per
                              direction. Only used with a coordinator.
+  HEIMDALL_REPORT_EVERY      how often this relay reports what each
+                             subject moved                       (1s)
+                             The coordinator divides a subject's rate
+                             between the relays carrying it on this
+                             clock. Only used with a coordinator.
 `)
 		return
 	}
@@ -147,7 +158,7 @@ func run() error {
 		defer cancel()
 		acl := newAdmitted(limits)
 		relayOpts = append(relayOpts, relay.WithACL(acl))
-		go acl.follow(ctx, h, *info, bandwidth)
+		go acl.follow(ctx, h, *info, bandwidth, config.Duration("HEIMDALL_REPORT_EVERY", defaultReportEvery))
 	}
 
 	// The default circuit allows 128 KB over two minutes, sized for

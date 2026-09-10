@@ -147,13 +147,13 @@ const (
 // It carries no authentication and must not be exposed. Bind it to
 // loopback, or to a private interface behind whatever already guards
 // the application's own admin traffic.
-// changed is told when a subject's ceiling moves, so the relays
-// carrying it can be sent the new one. Nil in a test that only cares
-// about the store.
-func admin(s *store, defMin, defMax int64, changed func(subject string, max int64)) http.Handler {
+// changed is told when a subject's rates move, so its share of every
+// relay carrying it can be worked out again. Nil in a test that only
+// cares about the store.
+func admin(s *store, defMin, defMax int64, changed func(subject string)) http.Handler {
 	mux := http.NewServeMux()
 	if changed == nil {
-		changed = func(string, int64) {}
+		changed = func(string) {}
 	}
 
 	mux.HandleFunc("PUT /v1/subjects/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -186,9 +186,9 @@ func admin(s *store, defMin, defMax int64, changed func(subject string, max int6
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Pushed after the write, so a relay never enforces a rate that
-		// a restart would not bring back.
-		changed(id, max)
+		// Divided after the write, so a relay never enforces a rate
+		// that a restart would not bring back.
+		changed(id)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

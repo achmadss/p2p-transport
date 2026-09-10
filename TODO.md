@@ -194,7 +194,7 @@ shapes.
 - [ ] `bifrost`: metering — per-subject counters and the usage endpoint
 - [x] The shaper: one bucket per subject, no per-circuit limiter, and a
       rate change that reaches a transfer already running
-- [ ] The allowance loop: demand reported per second, max-min allocated
+- [x] The allowance loop: demand reported per second, max-min allocated
       across the relays carrying a subject, pushed back
 - [x] Agents lease a relay instead of reading one from `config.json`,
       and re-lease without a deadline when a relay dies
@@ -241,6 +241,36 @@ SQLite when metering lands, since counters are the first state that
 cannot be rebuilt. And a relay that loses the coordinator keeps its
 access list exactly as it was, so an outage stops new machines arriving
 and does not evict the ones already relaying.
+
+The allowance loop is what makes a subject's rate one number when its
+machines are on several relays. Each relay reports, once a period, what
+each subject moved and whether it spent any of the period waiting on its
+bucket; bifrost turns those into demands, divides the subject's rate
+max-min fair between the relays carrying it, and pushes back the shares
+that moved. Two machines behind a fast and a slow link land on nine and
+one whether they share a relay or not, which is the property the whole
+loop exists for: placement changes how long the answer takes and never
+what it is.
+
+Three parts of it came out smaller than `FLEET.md` §4.2 drew them, and
+that section now records why. A relay reports only the subjects that
+moved something, because a share nobody has mentioned for three periods
+falls back to a floor on its own and silence is cheaper than a zero. The
+circuit count is not reported, because the division never reads it. And
+only a share whose number actually changed is pushed, so a fleet where
+nothing is happening puts nothing on the wire.
+
+Measuring the wait is what made the demand signal possible, and it cost
+one change in the byte path: `pay` reserves and sleeps rather than
+calling `WaitN`, which is the same thing with the delay hidden. Here the
+delay is the whole point — it is the only evidence a subject would have
+taken more than it was given. That is the blocked-time signal the earlier
+note said was missing, and it is now there.
+
+What is still missing is the counters that survive a restart. The bytes
+are counted per subject and thrown away every period, which is what the
+loop needs and not what a bill needs; metering is the next box and it is
+where the subject store stops being a JSON file.
 
 The shaper did not need the fork `FLEET.md` §4.5 called for, and that
 section now says why. Every byte a relay forwards arrives through one of

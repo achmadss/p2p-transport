@@ -98,9 +98,11 @@ their own. The fleet's arithmetic is
 all knobs with defaults: `BIFROST_HEADROOM` and `BIFROST_PACK_TO` decide
 how many machines fit on a relay, `BIFROST_SUBJECT_MIN` and
 `BIFROST_SUBJECT_MAX` are a subject's floor and ceiling when the
-application does not say, and `HEIMDALL_BANDWIDTH` is what a relay claims
+application does not say, `HEIMDALL_BANDWIDTH` is what a relay claims
 it can forward **per direction** — a relayed byte crosses the machine
-twice, so it is not the provider's headline number.
+twice, so it is not the provider's headline number — and
+`HEIMDALL_REPORT_EVERY` is how often a relay tells the coordinator what
+each subject moved, which is the clock the allowance loop runs on.
 
 ## Commands
 
@@ -277,6 +279,17 @@ cannot use — with the relay's own ceiling underneath. Only the machine
 holding the reservation belongs to a subject here, so `AllowConnect` is
 where the machine dialling in is tied to the subject it reached; without
 that tie a download would meet nothing but the ceiling.
+
+**A subject's rate is one number and its machines are on several
+relays**, so bifrost divides it. Each relay reports, once a period, what
+each subject moved and whether it spent any of that period waiting on its
+bucket — the wait is the only evidence a subject wanted more than it got,
+which is why `internal/shape` reserves and sleeps rather than calling
+`WaitN`, whose delay is hidden. Bifrost turns those into demands, divides
+the subject's rate max-min fair, and pushes back only the shares that
+moved. A relay it has not heard from for three periods falls back to a
+floor, so a machine that stops transferring does not strand the rate on
+its relay. `cmd/bifrost/allowance.go` is the whole of it.
 
 ## Traps
 

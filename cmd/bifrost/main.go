@@ -119,7 +119,7 @@ func run() error {
 	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(st,
 		config.Bytes("BIFROST_SUBJECT_MIN", defaultSubjectMin),
 		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax),
-		f.setLimit)}
+		f.divide)}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "admin API stopped:", err)

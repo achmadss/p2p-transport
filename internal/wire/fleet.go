@@ -12,9 +12,10 @@ import (
 const LeaseProto = protocol.ID("/ratatoskr/lease/1.0.0")
 
 // FleetProto is the relay's link to the coordinator. The relay opens it,
-// sends one Register, and then reads Commands until the stream dies.
-// One long-lived stream rather than a dial per command, so a relay that
-// loses the coordinator finds out immediately.
+// sends one Register, and then reads Commands down it while sending a
+// Demand up it once a period, until the stream dies. One long-lived
+// stream rather than a dial per command, so a relay that loses the
+// coordinator finds out immediately.
 const FleetProto = protocol.ID("/ratatoskr/fleet/1.0.0")
 
 // Register is a relay introducing itself.
@@ -57,6 +58,30 @@ const (
 	OpRevoke   = "revoke"   // it may not, any more
 	OpSetLimit = "setlimit" // this subject's rate has changed
 )
+
+// Report is what a relay says about one subject it carried this period.
+//
+// Used is what actually crossed the relay. Throttled says the subject
+// spent some of the period waiting on its bucket, which is how a relay
+// asks for more than it moved: a machine held at its limit would have
+// taken more if it had been allowed to.
+type Report struct {
+	Subject   string `json:"subject"`
+	Used      int64  `json:"used"`
+	Throttled bool   `json:"throttled"`
+}
+
+// Demand is one period of reports, sent up the same stream the commands
+// come down. Subjects that moved nothing are left out, which is most of
+// the traffic saved for none of the accuracy: the coordinator lets a
+// share it has not heard about decay on its own.
+type Demand struct {
+	// Period is how long this report covers. The coordinator uses it to
+	// decide when a silent relay has gone idle, so it travels with the
+	// report rather than being configured twice.
+	Period  time.Duration `json:"period"`
+	Reports []Report      `json:"reports"`
+}
 
 // Lease is the coordinator's answer to an agent.
 type Lease struct {

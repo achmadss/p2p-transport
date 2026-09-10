@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/achmadss/p2p-transport/internal/shape"
 	"github.com/achmadss/p2p-transport/internal/wire"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
 // The access list fails closed. A machine that learned this relay's
@@ -92,5 +97,84 @@ func TestApplyCarriesTheRate(t *testing.T) {
 	}
 	if got := limits.RateFor(who); got != 0 {
 		t.Fatalf("a revoked machine is still shaped at %v, want nothing", got)
+	}
+}
+
+// The reporter is the relay's half of the allowance loop. If it stays
+// quiet the coordinator has nothing to divide, and a subject spread over
+// two relays keeps whatever each was given first.
+//
+// Real bytes over a real shaped host, because the number reported has to
+// be the number the byte path counted, and only the byte path counts it.
+func TestReporterSendsWhatCrossedTheRelay(t *testing.T) {
+	const (
+		perSecond = 1 << 20 // fast enough not to slow the test down
+		payload   = 4 << 10
+	)
+	relay, sender := newTestHost(t), newTestHost(t)
+
+	limits := shape.New(0)
+	a := newAdmitted(limits)
+	a.apply(wire.Command{Op: wire.OpAdmit, Peer: sender.ID().String(), Subject: "alice", Rate: perSecond})
+	wrapped := shapedHost{Host: relay, limits: limits}
+
+	sent := make(chan wire.Demand, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go a.report(ctx, func(v any) error {
+		if d, ok := v.(wire.Demand); ok {
+			select {
+			case sent <- d:
+			default:
+			}
+		}
+		return nil
+	}, 50*time.Millisecond)
+
+	// An idle relay says nothing, which is what makes a short period
+	// affordable.
+	select {
+	case d := <-sent:
+		t.Fatalf("an idle relay reported %v, want silence", d)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	const proto = protocol.ID("/test/1.0.0")
+	done := make(chan struct{})
+	wrapped.SetStreamHandler(proto, func(s network.Stream) {
+		defer s.Close()
+		io.Copy(io.Discard, s)
+		close(done)
+	})
+	if err := sender.Connect(ctx, peer.AddrInfo{ID: relay.ID(), Addrs: relay.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := sender.NewStream(ctx, relay.ID(), proto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(make([]byte, payload)); err != nil {
+		t.Fatal(err)
+	}
+	s.CloseWrite()
+	<-done
+
+	var moved int64
+	for moved < payload {
+		select {
+		case d := <-sent:
+			if len(d.Reports) != 1 || d.Reports[0].Subject != "alice" {
+				t.Fatalf("reported %v, want one line for alice", d.Reports)
+			}
+			if d.Period != 50*time.Millisecond {
+				t.Fatalf("reported a period of %s, want the one it is reporting on", d.Period)
+			}
+			moved += d.Reports[0].Used
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d bytes were ever reported", moved, payload)
+		}
+	}
+	if moved != payload {
+		t.Fatalf("reported %d bytes for a %d byte transfer", moved, payload)
 	}
 }

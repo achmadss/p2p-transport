@@ -11,8 +11,11 @@ import (
 // bucket is the subject limiter a machine draws on, which is what most
 // of these tests are really asking about.
 func bucket(l *Limits, p peer.ID) *rate.Limiter {
-	b, _ := l.bucketFor(p)
-	return b
+	a, _ := l.bucketFor(p)
+	if a == nil {
+		return nil
+	}
+	return a.bucket
 }
 
 // Only one end of a circuit is placed here. The other dials in and
@@ -70,7 +73,7 @@ func TestOneBucketPerSubject(t *testing.T) {
 // nothing and costing it everything.
 func TestUnknownMachineMeetsTheCeiling(t *testing.T) {
 	l := New(1000)
-	if b, total := l.bucketFor(peer.ID("stranger")); b != nil || total != l.total {
+	if a, total := l.bucketFor(peer.ID("stranger")); a != nil || total != l.total {
 		t.Fatal("an unknown machine misses the relay ceiling, or is shaped by a subject it does not belong to")
 	}
 	if got := l.RateFor(peer.ID("stranger")); got != 0 {
@@ -144,5 +147,67 @@ func TestRateIsEnforced(t *testing.T) {
 	// not a measurement of anything.
 	if took := time.Since(start); took < 1500*time.Millisecond || took > 4*time.Second {
 		t.Fatalf("two readers on one %d byte/s bucket took %s to move two seconds' worth", perSecond, took)
+	}
+}
+
+// The demand signal is two numbers: what moved, and whether it would
+// have moved more. Without the second one the coordinator cannot tell a
+// subject that has finished from one that is being held back, and would
+// leave the whole rate stranded on whichever relay used it last.
+func TestDemandReportsWhatMovedAndWhetherItWantedMore(t *testing.T) {
+	const perSecond = 200 << 10
+	l := New(0)
+	who := peer.ID("who")
+	l.Admit(who, "alice", perSecond)
+
+	if got := l.Demand(); len(got) != 0 {
+		t.Fatalf("a subject that moved nothing reported %v, want silence", got)
+	}
+
+	// Inside the burst, so nothing waits.
+	b := bucket(l, who)
+	if pay(b, 1<<10) {
+		t.Fatal("a read inside the burst waited")
+	}
+	l.allow["alice"].used.Add(1 << 10)
+
+	got := l.Demand()
+	if len(got) != 1 || got[0].Subject != "alice" || got[0].Used != 1<<10 {
+		t.Fatalf("reported %v, want one subject that moved 1 KiB", got)
+	}
+	if got[0].Throttled {
+		t.Fatal("a subject well under its rate was reported as held back")
+	}
+	if after := l.Demand(); len(after) != 0 {
+		t.Fatalf("reading the demand did not start a new period: %v", after)
+	}
+
+	// Now spend the burst and ask for more, which has to wait.
+	pay(b, b.Burst())
+	if !pay(b, perSecond/10) {
+		t.Fatal("a read past the burst did not wait, so nothing is being shaped")
+	}
+}
+
+// A subject held at its limit must be reported as held back, because
+// that is the whole of how it asks for more.
+func TestThrottlingIsReported(t *testing.T) {
+	const perSecond = 200 << 10
+	l := New(0)
+	who := peer.ID("who")
+	l.Admit(who, "alice", perSecond)
+
+	a := l.allow["alice"]
+	if pay(a.bucket, a.bucket.Burst()+perSecond/10) {
+		a.throttled.Store(true)
+	}
+	a.used.Add(1)
+
+	got := l.Demand()
+	if len(got) != 1 || !got[0].Throttled {
+		t.Fatalf("reported %v, want the subject marked as held back", got)
+	}
+	if again := l.Demand(); len(again) != 0 {
+		t.Fatal("the mark outlived its period")
 	}
 }

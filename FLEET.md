@@ -252,6 +252,25 @@ which can never sum above R, so the failure is safe but unfair: A stays
 at 9 even after it finishes. Traffic continues; the division stops
 adapting. That is the right trade and §7 says why.
 
+Three things came out different from the sketch above, and all three are
+smaller than it.
+
+A relay reports only the subjects that moved something. The chatter
+saving §4.3 puts off until the numbers are real turned out to be the
+simpler code rather than the cleverer code: a share the coordinator has
+not heard about for three periods falls back to the floor on its own, so
+silence and a reported zero say the same thing. The period travels with
+the report, so the coordinator does not have to be told twice what the
+relay's clock is.
+
+`circuits` is not in the report. The max-min division never reads it,
+and a number nothing reads is a number that goes stale unnoticed.
+
+Only what changed is pushed. A share whose allowance came out the same
+as last time is not sent, so a fleet where nothing is happening puts
+nothing on the wire, and a subject alone on one relay is told its rate
+once rather than once a second.
+
 ### 4.4 Three limiters, and only three
 
 In the byte path on a relay:

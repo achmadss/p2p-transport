@@ -102,7 +102,7 @@ func (a *admitted) AllowConnect(src peer.ID, _ multiaddr.Multiaddr, dest peer.ID
 // exactly as it was, so every machine already placed here keeps
 // relaying; what stops is new machines arriving. Clearing the list
 // instead would turn a coordinator restart into an outage for everyone.
-func (a *admitted) follow(ctx context.Context, h host.Host, coord peer.AddrInfo, bandwidth int64) {
+func (a *admitted) follow(ctx context.Context, h host.Host, coord peer.AddrInfo, bandwidth int64, period time.Duration) {
 	const (
 		firstWait = time.Second
 		maxWait   = 30 * time.Second
@@ -110,7 +110,7 @@ func (a *admitted) follow(ctx context.Context, h host.Host, coord peer.AddrInfo,
 	wait := firstWait
 	down := false
 	for {
-		registered, err := a.session(ctx, h, coord, bandwidth)
+		registered, err := a.session(ctx, h, coord, bandwidth, period)
 		switch {
 		case registered:
 			// The backoff resets on a session that got as far as
@@ -138,7 +138,7 @@ func (a *admitted) follow(ctx context.Context, h host.Host, coord peer.AddrInfo,
 // ends, saying whether it got as far as registering. A clean end and a
 // failure look the same from here: either way the answer is to open
 // another one.
-func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo, bandwidth int64) (bool, error) {
+func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo, bandwidth int64, period time.Duration) (bool, error) {
 	dial, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := h.Connect(dial, coord); err != nil {
@@ -160,10 +160,25 @@ func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo
 	for _, ad := range addrs {
 		out = append(out, ad.String())
 	}
-	if err := json.NewEncoder(s).Encode(wire.Register{Addrs: out, Bandwidth: bandwidth}); err != nil {
+	// Reports go up the same stream the commands come down, and the
+	// reporter runs alongside this loop, so one writer at a time.
+	enc := json.NewEncoder(s)
+	var wmu sync.Mutex
+	send := func(v any) error {
+		wmu.Lock()
+		defer wmu.Unlock()
+		return enc.Encode(v)
+	}
+	if err := send(wire.Register{Addrs: out, Bandwidth: bandwidth}); err != nil {
 		return false, err
 	}
 	fmt.Fprintln(os.Stderr, "registered with the coordinator")
+
+	// Stopped when this session ends, so a reporter never outlives the
+	// stream it writes to.
+	reporting, stop := context.WithCancel(ctx)
+	defer stop()
+	go a.report(reporting, send, period)
 
 	dec := json.NewDecoder(s)
 	for {
@@ -172,5 +187,29 @@ func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo
 			return true, err
 		}
 		a.apply(c)
+	}
+}
+
+// report tells the coordinator what each subject moved, once a period.
+//
+// It is what the allowance loop divides: a subject whose machines are on
+// two relays is given the share of its rate that each relay can actually
+// use, and neither relay can work that out alone.
+func (a *admitted) report(ctx context.Context, send func(any) error, period time.Duration) {
+	tick := time.NewTicker(period)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		reports := a.limits.Demand()
+		if len(reports) == 0 {
+			continue // nothing crossed this relay; silence says so
+		}
+		if err := send(wire.Demand{Period: period, Reports: reports}); err != nil {
+			return
+		}
 	}
 }

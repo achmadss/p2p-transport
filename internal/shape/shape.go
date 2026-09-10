@@ -13,9 +13,11 @@
 package shape
 
 import (
-	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/achmadss/p2p-transport/internal/wire"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"golang.org/x/time/rate"
@@ -52,10 +54,23 @@ func burstFor(rate int64) int {
 // already waiting on it wait by the new rate.
 type Limits struct {
 	mu      sync.RWMutex
-	subject map[peer.ID]string       // machines the coordinator placed here
-	via     map[peer.ID]peer.ID      // machines dialling in, and the placed machine they reached
-	bucket  map[string]*rate.Limiter // one per subject
-	total   *rate.Limiter            // the relay's own ceiling
+	subject map[peer.ID]string    // machines the coordinator placed here
+	via     map[peer.ID]peer.ID   // machines dialling in, and the placed machine they reached
+	allow   map[string]*allowance // one per subject
+	total   *rate.Limiter         // the relay's own ceiling
+}
+
+// allowance is a subject's bucket on this relay, and what has passed
+// through it since the coordinator last asked.
+//
+// The counters are atomic rather than under the lock because they are
+// touched on every read of every circuit and looked at once a period.
+// Together they are the whole demand signal: how much moved, and whether
+// it would have moved more if the bucket had let it.
+type allowance struct {
+	bucket    *rate.Limiter
+	used      atomic.Int64
+	throttled atomic.Bool
 }
 
 // New builds the limits for a relay that can forward total bytes per
@@ -65,7 +80,7 @@ func New(total int64) *Limits {
 	l := &Limits{
 		subject: map[peer.ID]string{},
 		via:     map[peer.ID]peer.ID{},
-		bucket:  map[string]*rate.Limiter{},
+		allow:   map[string]*allowance{},
 	}
 	if total > 0 {
 		l.total = rate.NewLimiter(rate.Limit(total), burstFor(total))
@@ -104,19 +119,19 @@ func (l *Limits) Attach(src, dst peer.ID) {
 // bucket is retuned rather than replaced, which is what lets a rate
 // change reach a transfer already running. The caller holds the lock.
 func (l *Limits) tune(subject string, max int64) {
-	b, ok := l.bucket[subject]
+	a, ok := l.allow[subject]
 	switch {
 	case max <= 0:
 		// No limit rather than no bandwidth. A limiter set to zero
 		// hands out its burst and then refuses every wait, which the
 		// byte path reads as "do not shape" — the opposite of what a
 		// zero would mean.
-		delete(l.bucket, subject)
+		delete(l.allow, subject)
 	case ok:
-		b.SetLimit(rate.Limit(max))
-		b.SetBurst(burstFor(max))
+		a.bucket.SetLimit(rate.Limit(max))
+		a.bucket.SetBurst(burstFor(max))
 	default:
-		l.bucket[subject] = rate.NewLimiter(rate.Limit(max), burstFor(max))
+		l.allow[subject] = &allowance{bucket: rate.NewLimiter(rate.Limit(max), burstFor(max))}
 	}
 }
 
@@ -140,7 +155,7 @@ func (l *Limits) Revoke(p peer.ID) {
 			return
 		}
 	}
-	delete(l.bucket, subject)
+	delete(l.allow, subject)
 }
 
 // SetLimit changes what a subject may reach, and takes effect on the
@@ -162,14 +177,35 @@ func (l *Limits) subjectOf(p peer.ID) string {
 	return l.subject[l.via[p]]
 }
 
-// bucketFor returns the limiters a machine's bytes pass through: its
-// subject's, nil when nothing is shaping it, and the relay's own. Two
-// returns rather than a slice because this is the byte path, and a
-// slice here is an allocation on every read.
-func (l *Limits) bucketFor(p peer.ID) (subject, total *rate.Limiter) {
+// bucketFor returns what a machine's bytes pass through: its subject's
+// allowance, nil when nothing is shaping it, and the relay's own
+// ceiling. Two returns rather than a slice because this is the byte
+// path, and a slice here is an allocation on every read.
+func (l *Limits) bucketFor(p peer.ID) (*allowance, *rate.Limiter) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.bucket[l.subjectOf(p)], l.total
+	return l.allow[l.subjectOf(p)], l.total
+}
+
+// Demand is what each subject moved since this was last called, and
+// whether it wanted more. Reading it starts a new period.
+//
+// A subject that moved nothing is left out rather than reported as
+// zero: the coordinator lets a share it has not heard about decay on its
+// own, so silence and a zero say the same thing for less traffic.
+func (l *Limits) Demand() []wire.Report {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]wire.Report, 0, len(l.allow))
+	for id, a := range l.allow {
+		used := a.used.Swap(0)
+		throttled := a.throttled.Swap(false)
+		if used == 0 {
+			continue
+		}
+		out = append(out, wire.Report{Subject: id, Used: used, Throttled: throttled})
+	}
+	return out
 }
 
 // RateFor is the rate a machine's subject may reach, in bytes per
@@ -179,11 +215,11 @@ func (l *Limits) bucketFor(p peer.ID) (subject, total *rate.Limiter) {
 func (l *Limits) RateFor(p peer.ID) int64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	b, ok := l.bucket[l.subjectOf(p)]
+	a, ok := l.allow[l.subjectOf(p)]
 	if !ok {
 		return 0
 	}
-	return int64(b.Limit())
+	return int64(a.bucket.Limit())
 }
 
 // Stream wraps a stream so the bytes read from it are shaped.
@@ -212,30 +248,51 @@ type shaped struct {
 // applies to the rest of it.
 func (s shaped) Read(p []byte) (int, error) {
 	n, err := s.Stream.Read(p)
-	subject, total := s.limits.bucketFor(s.who)
-	pay(subject, n)
+	a, total := s.limits.bucketFor(s.who)
+	if a != nil {
+		if pay(a.bucket, n) {
+			// Waiting on its own bucket is the subject saying it would
+			// have taken more. Waiting on the relay's ceiling is not:
+			// that is the relay being full, and it is not this
+			// subject's to ask about.
+			a.throttled.Store(true)
+		}
+		a.used.Add(int64(n))
+	}
 	pay(total, n)
 	return n, err
 }
 
-// pay waits out n bytes, in pieces no larger than the bucket can hold.
-// A single wait for more than the burst never returns, so a caller
-// reading with a buffer bigger than the burst would stall for ever. A
-// nil bucket is no limit and costs nothing.
-func pay(b *rate.Limiter, n int) {
+// pay waits out n bytes, in pieces no larger than the bucket can hold,
+// and says whether it had to wait at all. A single wait for more than
+// the burst never returns, so a caller reading with a buffer bigger than
+// the burst would stall for ever. A nil bucket is no limit and costs
+// nothing.
+//
+// The wait is a reservation and a sleep rather than WaitN, which is the
+// same thing with the delay hidden. Here the delay is the point: it is
+// the only evidence that a subject wanted more than it was given.
+func pay(b *rate.Limiter, n int) bool {
 	if b == nil {
-		return
+		return false
 	}
+	waited := false
 	for n > 0 {
 		take := n
 		if burst := b.Burst(); take > burst {
 			take = burst
 		}
-		if b.WaitN(context.Background(), take) != nil {
-			return
+		r := b.ReserveN(time.Now(), take)
+		if !r.OK() {
+			return waited
+		}
+		if d := r.Delay(); d > 0 {
+			waited = true
+			time.Sleep(d)
 		}
 		n -= take
 	}
+	return waited
 }
 
 // Compile-time proof that a shaped stream is still a stream, since it is
