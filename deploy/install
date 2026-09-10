@@ -45,13 +45,17 @@ root=$(dirname "$here")
 # that would own the socket — and the relay would be installed on the
 # coordinator instead, quietly, with one password prompt where there
 # should have been two.
-ctl=$(mktemp -u "${TMPDIR:-/tmp}/install-ssh.XXXXXX")
-SSHOPTS="-o ControlMaster=auto -o ControlPath=$ctl-%C -o ControlPersist=120 -o StrictHostKeyChecking=accept-new"
+# The directory is under /tmp rather than TMPDIR because a unix socket
+# path cannot exceed 104 bytes, %C alone is forty of them, and a Mac's
+# TMPDIR is a long path inside /var/folders that spends the rest.
+ctl=$(mktemp -d /tmp/p2p-install.XXXXXX)
+SSHOPTS="-o ControlMaster=auto -o ControlPath=$ctl/%C -o ControlPersist=120 -o StrictHostKeyChecking=accept-new"
 cleanup() {
-	for sock in "$ctl"-*; do
+	for sock in "$ctl"/*; do
 		[ -S "$sock" ] || continue
 		ssh -o ControlPath="$sock" -O exit x 2>/dev/null || true
 	done
+	rmdir "$ctl" 2>/dev/null || true
 }
 
 sh_on() { # sh_on <target> [args...] <script on stdin>
