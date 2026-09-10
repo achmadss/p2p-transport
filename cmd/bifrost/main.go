@@ -61,6 +61,15 @@ admin API, plain HTTP and JSON, rates in bytes per second:
   PUT    /v1/subjects/{id}/devices  {"peer_ids": ["12D3Koo..."]}
   GET    /v1/subjects/{id}/usage -> {"bytes": 1234, "since": "..."}
   DELETE /v1/subjects/{id}
+  GET    /v1/relays                 every relay, what it carries, and
+                                    how long since anything moved
+  POST   /v1/relays/{id}/drain      empty this relay so it can go
+  DELETE /v1/relays/{id}/drain      let it take work again
+
+Draining never breaks a transfer. No new machine is placed on the relay,
+each machine already there moves off at its own renewal, and the
+circuits still open run until they end. Destroy the relay when GET
+/v1/relays shows it draining with no machines and nothing moving.
 
 Usage only ever grows. Read it twice and subtract for a period, and
 watch since: it changes when the counting started again.
@@ -133,10 +142,9 @@ func run() error {
 	// The admin API is the only part an operator can get wrong in a way
 	// that matters, so its address is printed whether it is loopback or
 	// not.
-	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(st, usage,
+	srv := &http.Server{Addr: config.Str("BIFROST_ADMIN", defaultAdmin), Handler: admin(f,
 		config.Bytes("BIFROST_SUBJECT_MIN", defaultSubjectMin),
-		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax),
-		f.divide)}
+		config.Bytes("BIFROST_SUBJECT_MAX", defaultSubjectMax))}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "admin API stopped:", err)

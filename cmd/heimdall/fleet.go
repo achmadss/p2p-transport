@@ -190,11 +190,13 @@ func (a *admitted) session(ctx context.Context, h host.Host, coord peer.AddrInfo
 	}
 }
 
-// report tells the coordinator what each subject moved, once a period.
+// report tells the coordinator what each subject moved, once a period,
+// and says nothing moved when nothing did.
 //
 // It is what the allowance loop divides: a subject whose machines are on
 // two relays is given the share of its rate that each relay can actually
-// use, and neither relay can work that out alone.
+// use, and neither relay can work that out alone. It is also this
+// relay's heartbeat, which is why it goes out on an idle relay too.
 func (a *admitted) report(ctx context.Context, send func(any) error, period time.Duration) {
 	tick := time.NewTicker(period)
 	defer tick.Stop()
@@ -204,11 +206,11 @@ func (a *admitted) report(ctx context.Context, send func(any) error, period time
 			return
 		case <-tick.C:
 		}
-		reports := a.limits.Demand()
-		if len(reports) == 0 {
-			continue // nothing crossed this relay; silence says so
-		}
-		if err := send(wire.Demand{Period: period, Reports: reports}); err != nil {
+		// Sent every period whether or not anything moved. An empty
+		// report is not a wasted message: it is this relay saying it is
+		// still here, and it is the only way the coordinator can tell a
+		// relay with nothing to carry from one that has died.
+		if err := send(wire.Demand{Period: period, Reports: a.limits.Demand()}); err != nil {
 			return
 		}
 	}

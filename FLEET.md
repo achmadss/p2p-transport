@@ -255,13 +255,15 @@ adapting. That is the right trade and §7 says why.
 Three things came out different from the sketch above, and all three are
 smaller than it.
 
-A relay reports only the subjects that moved something. The chatter
-saving §4.3 puts off until the numbers are real turned out to be the
-simpler code rather than the cleverer code: a share the coordinator has
-not heard about for three periods falls back to the floor on its own, so
-silence and a reported zero say the same thing. The period travels with
-the report, so the coordinator does not have to be told twice what the
-relay's clock is.
+A relay's report names only the subjects that moved something, but the
+report itself goes out every period regardless. Leaving a quiet subject
+out costs nothing — a share the coordinator has not heard about for
+three periods falls back to the floor on its own, so silence and a
+reported zero say the same thing about a subject. Leaving the whole
+message out is different: it was tried, and it made an idle relay
+indistinguishable from a dead one. The empty report is now the relay's
+heartbeat, and §6.5 is what reads it. The period travels with it, so the
+coordinator does not have to be told twice what the relay's clock is.
 
 `circuits` is not in the report. The max-min division never reads it,
 and a number nothing reads is a number that goes stale unnoticed.
@@ -495,7 +497,51 @@ not. Force a drain only when the relay is being retired for another
 reason — a failing host, a provider migration — and accept the reconnect
 knowingly.
 
-Two guards. A circuit is never moved twice within five minutes, or a
+### 6.5 What is built: draining by hand, and a heartbeat under it
+
+The provider half of this section is not built. Nothing here creates or
+destroys a VPS, and the loop in §6.3 does not run. What is built is the
+half that decides, which is the half that can be wrong, and it can be
+driven by an operator with no cloud account at all:
+
+```text
+GET    /v1/relays              what every relay carries, and how long
+                               since anything moved through it
+POST   /v1/relays/{id}/drain   empty this one
+DELETE /v1/relays/{id}/drain   let it take work again
+```
+
+A draining relay keeps every machine and every circuit it already has.
+`pick` skips it, so nothing new lands; each machine moves itself at its
+next renewal, and that move is free in the sense §6.4 means — the
+circuits already open through the old relay go on running until they
+end, because moving a placement is not moving a connection. Destroy the
+relay when the listing shows it draining, carrying nothing, and idle.
+
+One exception, and it is the one that matters: a machine is renewed on a
+draining relay anyway when no other relay has room for it. Emptying a
+relay is worth waiting for; leaving a machine with no relay at all is
+not, because until it has one nothing outside its own network can reach
+it. The drain simply waits for capacity, which is exactly what §6.3's
+fifteen-minute patience is for.
+
+Underneath it is the heartbeat, and it is the same message as §4.2's
+report. A relay sends one every period whether or not anything moved, so
+the coordinator drops the stream of a relay it has not heard from for
+three periods — never sooner than fifteen seconds, because dropping a
+relay evicts every machine on it and a relay having a slow moment must
+not look like one whose power was cut. Before this, a relay that was
+merely idle said nothing at all, so a coordinator could count a dead VPS
+as capacity until libp2p gave up on the connection; a wedged process,
+which never closes anything, would have been counted for ever.
+
+The same message answers the other question a drain asks. An empty
+report means nothing is flowing here, and a report with bytes in it
+means a circuit is still open — which is what stops a relay being
+destroyed while a transfer it no longer has a placement for is still
+running through it.
+
+Two guards are designed and not built. A circuit is never moved twice within five minutes, or a
 busy fleet will bounce the same agent between relays. And a relay that
 just came up is not immediately a drain candidate — cooldown for one
 scale-down window, or the loop will build and destroy the same machine

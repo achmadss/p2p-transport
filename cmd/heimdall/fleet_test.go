@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,25 +119,40 @@ func TestReporterSendsWhatCrossedTheRelay(t *testing.T) {
 	a.apply(wire.Command{Op: wire.OpAdmit, Peer: sender.ID().String(), Subject: "alice", Rate: perSecond})
 	wrapped := shapedHost{Host: relay, limits: limits}
 
-	sent := make(chan wire.Demand, 4)
+	// Heartbeats are counted and reports are queued, so a run of empty
+	// periods can never push the report this test is waiting for out of
+	// the channel.
+	var beats atomic.Int64
+	sent := make(chan wire.Demand, 8)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	go a.report(ctx, func(v any) error {
-		if d, ok := v.(wire.Demand); ok {
-			select {
-			case sent <- d:
-			default:
-			}
+		d, ok := v.(wire.Demand)
+		if !ok {
+			return nil
+		}
+		if len(d.Reports) == 0 {
+			beats.Add(1)
+			return nil
+		}
+		select {
+		case sent <- d:
+		default:
 		}
 		return nil
 	}, 50*time.Millisecond)
 
-	// An idle relay says nothing, which is what makes a short period
-	// affordable.
+	// An idle relay still reports, with nothing in it. That empty report
+	// is the heartbeat: it is the only way the coordinator can tell a
+	// relay carrying nothing from one that has died.
+	time.Sleep(200 * time.Millisecond)
+	if beats.Load() == 0 {
+		t.Fatal("an idle relay said nothing at all, so silence cannot mean it is gone")
+	}
 	select {
 	case d := <-sent:
-		t.Fatalf("an idle relay reported %v, want silence", d)
-	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("an idle relay reported traffic: %v", d)
+	default:
 	}
 
 	const proto = protocol.ID("/test/1.0.0")

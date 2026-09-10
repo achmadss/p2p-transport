@@ -168,6 +168,17 @@ func (f *fleet) report(id peer.ID, d wire.Demand) {
 	// naming one subject twice must not buy two of them.
 	touched := map[string]bool{}
 	f.mu.Lock()
+	// A report that moved nothing is this relay's heartbeat and no more.
+	// One that moved something says a circuit is still open here, which
+	// is what stops a drained relay from being destroyed too early.
+	if n, ok := f.relays[id]; ok {
+		for _, r := range d.Reports {
+			if r.Used > 0 {
+				n.busy = time.Now()
+				break
+			}
+		}
+	}
 	for _, r := range d.Reports {
 		s, ok := f.shares[shareKey{r.Subject, id}]
 		if !ok {

@@ -11,15 +11,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-func testMeter(t *testing.T) *meter {
-	t.Helper()
-	m, err := openMeter(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
-}
-
 // usageOf reads the endpoint the application will read.
 func usageOf(t *testing.T, h http.Handler, id string) (int, counter) {
 	t.Helper()
@@ -88,12 +79,9 @@ func TestUsageSurvivesARestart(t *testing.T) {
 // The endpoint answers for a subject that exists and has moved nothing,
 // refuses one that does not, and forgets a subject that is deleted.
 func TestUsageEndpoint(t *testing.T) {
-	st, err := openStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := testMeter(t)
-	h := admin(st, m, 7, 70, nil)
+	f := testFleet(t)
+	m := f.meter
+	h := admin(f, 7, 70)
 
 	if code, _ := usageOf(t, h, "alice"); code != http.StatusNotFound {
 		t.Fatalf("usage of a subject nobody created = %d, want 404", code)

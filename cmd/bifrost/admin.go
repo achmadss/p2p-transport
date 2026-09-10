@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	"github.com/libp2p/go-libp2p/core/peer"
 
 	"github.com/achmadss/p2p-transport/internal/config"
 )
@@ -143,14 +146,13 @@ const (
 // It carries no authentication and must not be exposed. Bind it to
 // loopback, or to a private interface behind whatever already guards
 // the application's own admin traffic.
-// changed is told when a subject's rates move, so its share of every
-// relay carrying it can be worked out again. Nil in a test that only
-// cares about the store.
-func admin(s *store, m *meter, defMin, defMax int64, changed func(subject string)) http.Handler {
+//
+// It takes the fleet rather than the store and the meter separately,
+// because the relay half of the API needs the fleet anyway, and a
+// subject whose rates change has to be divided again the moment it does.
+func admin(f *fleet, defMin, defMax int64) http.Handler {
 	mux := http.NewServeMux()
-	if changed == nil {
-		changed = func(string) {}
-	}
+	s, m := f.store, f.meter
 
 	mux.HandleFunc("PUT /v1/subjects/{id}", func(w http.ResponseWriter, r *http.Request) {
 		// Pointers so an omitted rate takes the default and an explicit
@@ -184,7 +186,7 @@ func admin(s *store, m *meter, defMin, defMax int64, changed func(subject string
 		}
 		// Divided after the write, so a relay never enforces a rate
 		// that a restart would not bring back.
-		changed(id)
+		f.divide(id)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -235,6 +237,34 @@ func admin(s *store, m *meter, defMin, defMax int64, changed func(subject string
 			w.WriteHeader(http.StatusNoContent)
 		}
 	})
+
+	// The relay half. It decides nothing on its own: an operator, or one
+	// day a scaler, reads the list, drains the relay it wants gone, and
+	// destroys it once the list says it is empty and quiet.
+	mux.HandleFunc("GET /v1/relays", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(f.status(time.Now()))
+	})
+
+	// Draining is patient and reversible. It never breaks a transfer:
+	// machines move off at their own renewals, and the circuits already
+	// open through this relay run until they end.
+	drain := func(yes bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id, err := peer.Decode(r.PathValue("id"))
+			if err != nil {
+				http.Error(w, "not a peer id", http.StatusBadRequest)
+				return
+			}
+			if !f.drain(id, yes) {
+				http.Error(w, "no such relay", http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	mux.HandleFunc("POST /v1/relays/{id}/drain", drain(true))
+	mux.HandleFunc("DELETE /v1/relays/{id}/drain", drain(false))
 
 	return mux
 }

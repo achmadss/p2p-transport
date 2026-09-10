@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,11 +18,9 @@ func put(t *testing.T, h http.Handler, path, body string) int {
 // An application that says nothing about rates gets the defaults, so
 // the common call is the short one.
 func TestSubjectDefaults(t *testing.T) {
-	st, err := openStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := admin(st, testMeter(t), 7, 70, nil)
+	f := testFleet(t)
+	st := f.store
+	h := admin(f, 7, 70)
 
 	if got := put(t, h, "/v1/subjects/alice", `{}`); got != http.StatusNoContent {
 		t.Fatalf("PUT with no rates = %d, want 204", got)
@@ -41,11 +40,9 @@ func TestSubjectDefaults(t *testing.T) {
 
 // A ceiling under the floor is a promise that cannot be kept.
 func TestSubjectRatesRefused(t *testing.T) {
-	st, err := openStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := admin(st, testMeter(t), 7, 70, nil)
+	f := testFleet(t)
+	st := f.store
+	h := admin(f, 7, 70)
 
 	for _, body := range []string{`{"min":100,"max":10}`, `{"min":-1}`, `{"max":0}`, `not json`} {
 		if got := put(t, h, "/v1/subjects/x", body); got != http.StatusBadRequest {
@@ -60,12 +57,9 @@ func TestSubjectRatesRefused(t *testing.T) {
 // Subjects survive a restart, because the application is not going to
 // send them again.
 func TestSubjectsPersist(t *testing.T) {
-	dir := t.TempDir()
-	st, err := openStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := put(t, admin(st, testMeter(t), 7, 70, nil), "/v1/subjects/alice", `{"min":5,"max":50}`); got != http.StatusNoContent {
+	f := testFleet(t)
+	st, dir := f.store, filepath.Dir(f.store.path)
+	if got := put(t, admin(f, 7, 70), "/v1/subjects/alice", `{"min":5,"max":50}`); got != http.StatusNoContent {
 		t.Fatalf("PUT = %d, want 204", got)
 	}
 	if err := st.setDevices("alice", []string{"machine-1"}); err != nil {

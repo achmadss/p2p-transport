@@ -60,9 +60,11 @@ are ticked, and the three that need a person moving a cable are not. Step
 machines lease, a machine the coordinator did not place is refused, each
 subject's bytes pass through one bucket that a rate change reaches
 mid-transfer, one rate is divided between the relays carrying it and
-re-divided every second, and what every subject moved is counted and
-survives a restart — and none of it has carried a byte outside a test.
-Autoscaling is designed and not built. `TODO.md` has the per-step
+re-divided every second, what every subject moved is counted and
+survives a restart, and a relay can be drained by hand so a VPS can be
+destroyed without breaking a transfer — and none of it has carried a
+byte outside a test. Buying and destroying the VPS itself is designed
+and not built. `TODO.md` has the per-step
 detail, including why each decision went the way it did.
 
 Numbers, because a claim without one is not allowed here. All taken 9 Sep
@@ -104,8 +106,8 @@ application does not say, `HEIMDALL_BANDWIDTH` is what a relay claims
 it can forward **per direction** — a relayed byte crosses the machine
 twice, so it is not the provider's headline number — and
 `HEIMDALL_REPORT_EVERY` is how often a relay tells the coordinator what
-each subject moved, which is the clock the allowance loop runs on and
-the clock the meter counts on.
+each subject moved, which is the clock the allowance loop runs on, the
+clock the meter counts on, and the relay's heartbeat.
 
 ## Commands
 
@@ -293,6 +295,21 @@ the subject's rate max-min fair, and pushes back only the shares that
 moved. A relay it has not heard from for three periods falls back to a
 floor, so a machine that stops transferring does not strand the rate on
 its relay. `cmd/bifrost/allowance.go` is the whole of it.
+
+**An idle relay still reports, and that is how the fleet shrinks.** The
+report goes out every period whether or not anything moved, so silence
+means a relay is gone rather than merely quiet — bifrost drops the
+stream of one it has not heard from for three periods, never sooner than
+fifteen seconds, because dropping a relay evicts every machine on it.
+The same message says whether a circuit is still open here, which is
+what makes a drain safe. Draining is `POST /v1/relays/{id}/drain`: no
+new machine is placed there, each machine already there moves itself off
+at its next renewal, and the circuits still open run until they end,
+because moving a placement is not moving a connection. A machine is
+renewed on a draining relay anyway when nowhere else has room — emptying
+a relay is worth waiting for and leaving a machine unreachable is not.
+Creating and destroying the VPS is the operator's; `FLEET.md` §6.5 says
+what is built and what is not.
 
 **Metering is those same reports added up.** There is no scrape and no
 second port on the relays: the numbers the allowance loop already needs

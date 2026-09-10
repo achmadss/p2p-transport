@@ -198,8 +198,13 @@ shapes.
       across the relays carrying a subject, pushed back
 - [x] Agents lease a relay instead of reading one from `config.json`,
       and re-lease without a deadline when a relay dies
+- [x] A heartbeat: a relay reports every period even when idle, and the
+      coordinator drops one that has gone quiet
+- [x] Draining by hand: `GET /v1/relays`, `POST` and `DELETE
+      /v1/relays/{id}/drain`, and a machine that moves itself off at its
+      next renewal
 - [ ] Autoscale within `min`/`max`; pack tight, shed the idle first,
-      drain the emptiest relay before destroying it
+      and call a provider to create and destroy the VPS
 
 **Check:** a relay is killed mid-transfer and the pair is back on
 another one; two machines on one subject behind a fast and a slow link
@@ -256,12 +261,22 @@ loop exists for: placement changes how long the answer takes and never
 what it is.
 
 Three parts of it came out smaller than `FLEET.md` §4.2 drew them, and
-that section now records why. A relay reports only the subjects that
-moved something, because a share nobody has mentioned for three periods
-falls back to a floor on its own and silence is cheaper than a zero. The
-circuit count is not reported, because the division never reads it. And
-only a share whose number actually changed is pushed, so a fleet where
-nothing is happening puts nothing on the wire.
+that section now records why. A relay's report names only the subjects
+that moved something, because a share nobody has mentioned for three
+periods falls back to a floor on its own and silence is cheaper than a
+zero. The circuit count is not reported, because the division never
+reads it. And only a share whose number actually changed is pushed, so a
+fleet where nothing is happening puts nothing on the wire.
+
+Leaving the *message* out on an idle period was the fourth, and it was
+wrong. It made a relay carrying nothing look exactly like a relay whose
+power had been cut, and the coordinator had no other way to tell: a
+wedged process never closes its stream, so a dead VPS was counted as
+capacity until libp2p gave up on the connection. The report now goes out
+every period whether or not anything moved, and the coordinator drops
+the stream of a relay it has not heard from for three periods — never
+sooner than fifteen seconds, because dropping a relay evicts every
+machine on it.
 
 Measuring the wait is what made the demand signal possible, and it cost
 one change in the byte path: `pay` reserves and sleeps rather than
