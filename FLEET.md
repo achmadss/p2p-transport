@@ -681,6 +681,62 @@ list only the machines this fleet made; and what is the honest
 forwardable bandwidth of each size. `internal/provision/<name>` per
 provider, one file each, and the loop never changes.
 
+### 6.7 The first adapter: DEPA Cloud
+
+`internal/provision/depa` is the first one written, against
+`api.depa.id`. It is worth reading before the second, because it is a
+worked example of a provider that does not fit and adapts anyway.
+
+**There is no user data and no cloud-init.** Nothing in DEPA's create
+call can tell a machine anything at boot: it takes a location, a tier,
+an OS template, hardware sizes and a password, and that is all. So a
+relay is not built, it is copied. An operator prepares one instance by
+hand — heimdall installed, `HEIMDALL_BIFROST` set, the service enabled —
+and `Create` calls `POST /v1/instance/{uuid}/clone` against it. The
+coordinator's address lives in that instance rather than in a `Spec`,
+and a `Spec` that carries `UserData` is refused rather than quietly
+stripped, because a relay that comes up without its coordinator is an
+orphan that bills and the loop would go on making more of them.
+
+A clone inherits the source's size and location, so `Spec.Size` and
+`Spec.Region` have nowhere to go. Rather than ignore them, `Sizes` and
+`Regions` each return exactly one value — the source's — read from
+`GET /v1/instance/{uuid}/detail`. A loop choosing from what the
+provisioner offers therefore always chooses the only thing that can
+happen, which is the honest shape of clone-based provisioning.
+
+**There is no idempotency key**, so the hostname is one. Every machine
+this adapter makes is named `heimdall-` plus the key, `Create` lists
+before it clones, and `List` returns only the hostnames carrying that
+prefix — which is also what stops a reconcile destroying somebody
+else's machine in the same account as an orphan. The key must be a
+legal hostname and is checked, so trimming the prefix gives the key back
+exactly. The check is a listing rather than a lock, so two `Create`s
+racing inside one round trip could still both clone; one coordinator
+runs one scaling loop, and that is the only reason it is safe.
+
+**DEPA publishes no bandwidth figure anywhere** — not per tier, not per
+size, not per location, not as a monthly transfer allowance. So
+`Size.Bandwidth` comes from `Options.Bandwidth`, a number measured on a
+real machine and passed in, and `New` refuses to build a client without
+one. §6.1's trap is handled here in the sense that matters: nothing
+downstream ever sees a figure nobody measured.
+
+Two smaller decisions. `Stopped` and `Error` map to `Gone` rather than
+`Starting`: both bill, neither will ever carry a byte, and the useful
+thing for the loop to do with either is retire the placement and destroy
+the machine. And `Machine.Created` is left zero, because the listing
+prints a time with no timezone on it and guessing which one DEPA means
+is exactly the kind of unmeasured number this project keeps retracting;
+the loop knows when it asked for a machine, which is the better clock
+for a cooldown anyway.
+
+`ErrNoCapacity` is never returned. DEPA documents no error catalogue, so
+the adapter classifies on HTTP status alone: 429 and 5xx are
+`ErrTransient`, 402 and 403 are `ErrQuota`, and everything else is fatal.
+Out of capacity is not distinguishable from any other refusal, and
+inventing the distinction would be worse than not having it.
+
 ## 7. When bifrost is down
 
 It is a single point of failure, and the failure mode is chosen rather

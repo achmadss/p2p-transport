@@ -203,8 +203,10 @@ shapes.
 - [x] Draining by hand: `GET /v1/relays`, `POST` and `DELETE
       /v1/relays/{id}/drain`, and a machine that moves itself off at its
       next renewal
+- [x] `internal/provision`: the interface the scaler will call, and
+      DEPA Cloud as the first adapter behind it
 - [ ] Autoscale within `min`/`max`; pack tight, shed the idle first,
-      and call a provider to create and destroy the VPS
+      and call the provisioner to create and destroy the VPS
 
 **Check:** a relay is killed mid-transfer and the pair is back on
 another one; two machines on one subject behind a fast and a slow link
@@ -326,6 +328,19 @@ how many machines fit on a relay, `BIFROST_SUBJECT_MIN` (2M) and
 does not say, and `HEIMDALL_BANDWIDTH` (50M) is what a relay claims it
 can forward. That last one is per direction and it is a guess until
 somebody measures the machine — a relayed byte crosses it twice.
+
+The first provider adapter is written and the loop that would call it is
+not, which is the right order: the adapter is where a provider's API
+gets to be surprising, and DEPA Cloud was surprising in three ways worth
+knowing before any more of this is built. It has no user data and no
+cloud-init, so nothing can be told to a machine at boot and a relay has
+to be a clone of one instance an operator prepared; it has no
+idempotency key, so the hostname carries one and `Create` lists before
+it clones; and it publishes no bandwidth figure anywhere, so
+`Size.Bandwidth` is a measured number passed in rather than one read
+back. Each of those is a fact about DEPA and none of them reached
+`internal/provision`, which is what the interface was for. `FLEET.md`
+§6.7 has the detail.
 
 ## Step 8 — Windows and Linux
 

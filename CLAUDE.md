@@ -23,7 +23,7 @@ binaries and a package:
 |------|------|
 | `transport` | The package at the module root. The surface an application uses; everything else is `internal/`. |
 | `heimdall` | A relay node. Forwards encrypted bytes it cannot read. |
-| `bifrost` | The relay coordinator: places, admits and sets rates; metering and scaling are designed in `FLEET.md` and not built. |
+| `bifrost` | The relay coordinator: places, admits, sets rates and meters; the scaling loop is designed in `FLEET.md` and not built. |
 | `ratatoskr` | The test harness — `id`, `run`, `discover`, `connect`, `bench`, NAT diagnostics. Not a product. |
 
 The Norse names are on the wire already, in protocol identifiers like
@@ -63,8 +63,10 @@ mid-transfer, one rate is divided between the relays carrying it and
 re-divided every second, what every subject moved is counted and
 survives a restart, and a relay can be drained by hand so a VPS can be
 destroyed without breaking a transfer — and none of it has carried a
-byte outside a test. Buying and destroying the VPS itself is designed
-and not built. `TODO.md` has the per-step
+byte outside a test. Buying and destroying the VPS itself is half built:
+`internal/provision` is the interface and `internal/provision/depa` is
+the first adapter behind it, and the scaling loop that would call either
+of them does not exist yet. `TODO.md` has the per-step
 detail, including why each decision went the way it did.
 
 Numbers, because a claim without one is not allowed here. All taken 9 Sep
@@ -320,6 +322,21 @@ two readings is the only way to get a period out of it and the start
 time is the only way to tell a quiet period from a counter that went
 back to zero. It is written to `usage.json` on a thirty-second timer, so
 a crash costs at most that much counting.
+
+**Buying a machine is an interface, and the provider is the awkward
+part.** `internal/provision` is what the scaling loop will call — five
+methods, chosen for what the loop needs rather than for what any
+provider offers — and every provider's dialect stays inside its own
+adapter under it. The first adapter is DEPA Cloud, and it is the worked
+example of a provider that does not fit: DEPA has no user data of any
+kind, so a relay is a clone of one instance an operator prepared rather
+than a machine built from a spec, and the coordinator's address is baked
+into that instance; it has no idempotency key, so the hostname carries
+one and `Create` lists before it clones; and it publishes no bandwidth
+figure anywhere, so `Size.Bandwidth` is measured on a real machine and
+passed in, and the client refuses to exist without it. None of those
+three facts reached the interface, which is the whole point of having
+one.
 
 ## Traps
 
