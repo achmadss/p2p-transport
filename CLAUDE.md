@@ -16,14 +16,14 @@ repository. The whole design question here is what that consumer is
 allowed to see. `PLAN.md` §2 is the answer; treat it as the point of the
 project rather than a detail of it.
 
-Module `github.com/achmadss/p2p-transport`. One Go module, two binaries
-and a package:
+Module `github.com/achmadss/p2p-transport`. One Go module, three
+binaries and a package:
 
 | Name | Role |
 |------|------|
 | `transport` | The package at the module root. The surface an application uses; everything else is `internal/`. |
 | `heimdall` | A relay node. Forwards encrypted bytes it cannot read. |
-| `bifrost` | The relay coordinator: places, meters and scales the fleet. Designed in `FLEET.md`, not built. |
+| `bifrost` | The relay coordinator: places and admits; metering and scaling are designed in `FLEET.md` and not built. |
 | `ratatoskr` | The test harness — `id`, `run`, `discover`, `connect`, `bench`, NAT diagnostics. Not a product. |
 
 The Norse names are on the wire already, in protocol identifiers like
@@ -56,8 +56,10 @@ only. `git log` has the original wording; do not re-add any of it here.
 
 Steps 0 to 5 are done. Step 6 is half done: the two boxes that are code
 are ticked, and the three that need a person moving a cable are not. Step
-7 is designed in `FLEET.md` and not built. `TODO.md` has the per-step
-detail, including why each decision went the way it did.
+7 has started — the coordinator places and the relay obeys it, and the
+agent still reads its relay from `config.json`, so nothing leases yet.
+`TODO.md` has the per-step detail, including why each decision went the
+way it did.
 
 Numbers, because a claim without one is not allowed here. All taken 9 Sep
 2026 on the owner's machines:
@@ -86,6 +88,14 @@ notebook had in common.
 | `RATATOSKR_DIAG` | Print everything below the seam. The one exception to the seam rule. |
 | `RATATOSKR_ASSUME_PUBLIC` | Skip the forced relay reservation on a machine that really is reachable. |
 | `RATATOSKR_UPGRADE_EVERY`, `RATATOSKR_UPGRADE_DIAL` | How often a relayed peer is re-dialled, and one attempt's budget. |
+
+`heimdall -h` and `bifrost -h` list their own. The fleet's arithmetic is
+all knobs with defaults: `BIFROST_HEADROOM` and `BIFROST_PACK_TO` decide
+how many machines fit on a relay, `BIFROST_SUBJECT_MIN` and
+`BIFROST_SUBJECT_MAX` are a subject's floor and ceiling when the
+application does not say, and `HEIMDALL_BANDWIDTH` is what a relay claims
+it can forward **per direction** — a relayed byte crosses the machine
+twice, so it is not the provider's headline number.
 
 ## Commands
 

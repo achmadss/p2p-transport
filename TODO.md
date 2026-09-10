@@ -188,7 +188,10 @@ that was already there.
 `FLEET.md` is the design. Bifrost places, meters and scales; heimdall
 shapes.
 
-- [ ] `bifrost`: relay registry, placement, leases, quota push, metering
+- [x] `bifrost`: relay registry, placement, leases and admission push
+- [x] Heimdall joins a fleet: registers, follows the pushed access list,
+      and refuses everyone else
+- [ ] `bifrost`: metering — per-subject counters and the usage endpoint
 - [ ] Vendored relay hop: one bucket per subject, no per-circuit limiter
 - [ ] The allowance loop: demand reported per second, max-min allocated
       across the relays carrying a subject, pushed back
@@ -201,6 +204,31 @@ shapes.
 another one; two machines on one subject behind a fast and a slow link
 measure 9 and 1 rather than 5 and 1, on the same relay or on two; a
 limit changed mid-transfer takes effect mid-transfer.
+
+The coordinator and the relay half of `FLEET.md` §9 step 1 are built,
+and the agent half is not: `ratatoskr` still reads its relay from
+`config.json`, so nothing leases yet and the placement code has never
+carried a byte. The state that survives a restart is the subjects file
+and nothing else — relays re-register and machines re-lease, so a
+coordinator that restarts costs one round of each rather than a
+recovery.
+
+Two decisions in it are worth the sentence. The subject store is a JSON
+file rather than the SQLite `FLEET.md` §8 names, because at this step
+the durable state is a handful of subjects and their machines: the
+placements and the registry are rebuilt from what reconnects. It becomes
+SQLite when metering lands, since counters are the first state that
+cannot be rebuilt. And a relay that loses the coordinator keeps its
+access list exactly as it was, so an outage stops new machines arriving
+and does not evict the ones already relaying.
+
+Every number the arithmetic turns on is an environment variable with a
+default: `BIFROST_HEADROOM` (0.70) and `BIFROST_PACK_TO` (0.85) decide
+how many machines fit on a relay, `BIFROST_SUBJECT_MIN` (2M) and
+`BIFROST_SUBJECT_MAX` (50M) are what a subject gets when the application
+does not say, and `HEIMDALL_BANDWIDTH` (50M) is what a relay claims it
+can forward. That last one is per direction and it is a guess until
+somebody measures the machine — a relayed byte crosses it twice.
 
 ## Step 8 — Windows and Linux
 

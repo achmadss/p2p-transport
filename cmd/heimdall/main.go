@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,23 +23,18 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-func toMultiaddrs(in []string) ([]multiaddr.Multiaddr, error) {
-	out := make([]multiaddr.Multiaddr, 0, len(in))
-	for _, a := range in {
-		ma, err := multiaddr.NewMultiaddr(a)
-		if err != nil {
-			return nil, fmt.Errorf("HEIMDALL_ANNOUNCE: bad address %q: %w", a, err)
-		}
-		out = append(out, ma)
-	}
-	return out, nil
-}
-
 // Defaults. Every one is overridable; see usage below.
 const (
 	defaultPort     = 4001
 	defaultData     = 64 << 30
 	defaultDuration = time.Hour
+
+	// defaultBandwidth is what this relay tells the coordinator it can
+	// forward, per direction. It is a starting figure and not a
+	// measurement: check what the provider actually sells, remember a
+	// relayed byte crosses the machine twice, and set
+	// HEIMDALL_BANDWIDTH to what is left.
+	defaultBandwidth = 50 << 20
 
 	// fallbackTCP is the second TCP port heimdall answers on. Some
 	// networks pass 443 and drop everything else, and a relay nobody on
@@ -65,6 +61,17 @@ environment (empty means the default):
                              address too if you want it reachable.
   HEIMDALL_CIRCUIT_DATA      bytes per circuit, K/M/G suffixes  (64G)
   HEIMDALL_CIRCUIT_DURATION  lifetime per circuit               (1h)
+  HEIMDALL_BIFROST           the coordinator's multiaddr. Set it and
+                             this relay joins a fleet: it registers,
+                             and only the machines the coordinator
+                             places here may use it. Unset, the relay
+                             is open to anyone who knows its address.
+  HEIMDALL_BANDWIDTH         bytes per second, PER DIRECTION, this
+                             relay can forward, K/M/G suffixes  (50M)
+                             A relayed byte crosses the machine twice,
+                             so this is not the provider's headline
+                             number unless that number is per
+                             direction. Only used with a coordinator.
 `)
 		return
 	}
@@ -94,13 +101,13 @@ func run() error {
 	// A relay behind a cloud provider's NAT sees only its private
 	// address, and announcing that sends every machine at an address
 	// that reaches nothing. HEIMDALL_ANNOUNCE names the public one.
-	if announce := config.List("HEIMDALL_ANNOUNCE"); len(announce) > 0 {
-		addrs, err := toMultiaddrs(announce)
-		if err != nil {
-			return err
-		}
+	announce, err := config.Multiaddrs("HEIMDALL_ANNOUNCE")
+	if err != nil {
+		return err
+	}
+	if len(announce) > 0 {
 		opts = append(opts, libp2p.AddrsFactory(func([]multiaddr.Multiaddr) []multiaddr.Multiaddr {
-			return addrs
+			return announce
 		}))
 	}
 
@@ -109,6 +116,27 @@ func run() error {
 		return fmt.Errorf("start host: %w", err)
 	}
 	defer h.Close()
+
+	// With a coordinator, the relay is closed: it carries the machines
+	// bifrost places here and refuses everyone else. Without one, it is
+	// open to anyone holding its address, which is how a single relay
+	// run by hand has always worked.
+	coord, err := config.Multiaddrs("HEIMDALL_BIFROST")
+	if err != nil {
+		return err
+	}
+	var relayOpts []relay.Option
+	if len(coord) > 0 {
+		info, err := peer.AddrInfoFromP2pAddr(coord[0])
+		if err != nil {
+			return fmt.Errorf("HEIMDALL_BIFROST names no peer: %w", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		acl := newAdmitted()
+		relayOpts = append(relayOpts, relay.WithACL(acl))
+		go acl.follow(ctx, h, *info, config.Bytes("HEIMDALL_BANDWIDTH", defaultBandwidth))
+	}
 
 	// The default circuit allows 128 KB over two minutes, sized for
 	// signalling rather than for files. A relayed transfer here is a
@@ -121,7 +149,7 @@ func run() error {
 		Duration: config.Duration("HEIMDALL_CIRCUIT_DURATION", defaultDuration),
 		Data:     config.Bytes("HEIMDALL_CIRCUIT_DATA", defaultData),
 	}
-	if _, err := relay.New(h, relay.WithResources(res)); err != nil {
+	if _, err := relay.New(h, append(relayOpts, relay.WithResources(res))...); err != nil {
 		return fmt.Errorf("start relay: %w", err)
 	}
 

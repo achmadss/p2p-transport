@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/multiformats/go-multiaddr"
 )
 
 // Everything tunable is read from the environment with a working
@@ -63,4 +66,33 @@ func List(name string) []string {
 		}
 	}
 	return out
+}
+
+// Multiaddrs reads a comma-separated variable as addresses, failing on
+// the first bad one.
+//
+// This is the exception to the rule above: an address the operator
+// mistyped has no sensible default, and falling back to what the
+// machine sees itself is exactly the case the variable exists to
+// override. Better to refuse to start than to advertise an address
+// that reaches nothing.
+func Multiaddrs(name string) ([]multiaddr.Multiaddr, error) {
+	var out []multiaddr.Multiaddr
+	for _, s := range List(name) {
+		ma, err := multiaddr.NewMultiaddr(s)
+		if err != nil {
+			return nil, fmt.Errorf("%s: bad address %q: %w", name, s, err)
+		}
+		out = append(out, ma)
+	}
+	return out, nil
+}
+
+// Float reads a fraction or a rate. Anything unparseable falls back to
+// the default, the same as the rest of the knobs above.
+func Float(name string, def float64) float64 {
+	if v, err := strconv.ParseFloat(os.Getenv(name), 64); err == nil {
+		return v
+	}
+	return def
 }

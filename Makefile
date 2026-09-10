@@ -9,6 +9,7 @@ export CGO_ENABLED = 0
 build:
 	go build -ldflags "$(LDFLAGS)" -o dist/ratatoskr ./cmd/ratatoskr
 	go build -ldflags "$(LDFLAGS)" -o dist/heimdall  ./cmd/heimdall
+	go build -ldflags "$(LDFLAGS)" -o dist/bifrost   ./cmd/bifrost
 
 test:
 	go test ./...
@@ -23,6 +24,7 @@ cross:
 	GOOS=linux   GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/ratatoskr-linux-arm64   ./cmd/ratatoskr
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/ratatoskr-windows-amd64.exe ./cmd/ratatoskr
 	GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/heimdall-linux-amd64    ./cmd/heimdall
+	GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/bifrost-linux-amd64     ./cmd/bifrost
 
 clean:
 	rm -rf dist
