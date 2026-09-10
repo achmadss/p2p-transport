@@ -199,6 +199,14 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 	// one issuing the lease.
 	f.divide(id)
 
+	rate := f.allotted(id, n.id)
+	if rate <= 0 {
+		// The subject was removed between the lookup and the division.
+		// The ceiling is wrong but survivable; a zero is not, because a
+		// relay reads it as no limit at all.
+		rate = sub.Max
+	}
+
 	// Admit before answering, or the agent races its own lease: it
 	// would dial the relay and be refused by an access list that has
 	// not heard of it yet.
@@ -206,7 +214,7 @@ func (f *fleet) lease(who peer.ID) wire.Lease {
 		Op:      wire.OpAdmit,
 		Peer:    who.String(),
 		Subject: id,
-		Rate:    f.allotted(id, n.id),
+		Rate:    rate,
 	}); err != nil {
 		f.drop(n)
 		return wire.Lease{TTL: f.knobs.ttl}
@@ -256,28 +264,50 @@ func (f *fleet) drop(n *relayNode) {
 func (f *fleet) register(id peer.ID, r wire.Register, enc *json.Encoder) *relayNode {
 	n := &relayNode{id: id, addrs: r.Addrs, bandwidth: r.Bandwidth, enc: enc}
 
-	// The subjects are looked up after the lock is dropped, so this
-	// never holds the fleet's lock and the store's at once.
+	// A machine comes back at the share this relay was already holding,
+	// not at its subject's whole rate: the subject's other relays have
+	// not given anything up, and a restart must not be a way to be
+	// allotted the rate twice.
+	type readmit struct {
+		who     string
+		subject string
+		rate    int64
+	}
+
+	// The store is read after the lock is dropped, so this never holds
+	// the fleet's lock and the store's at once.
 	f.mu.Lock()
 	f.relays[id] = n
-	back := map[string]string{} // machine id -> subject id
+	var back []readmit
 	for who, p := range f.placed {
-		if p.relay == id {
-			back[who.String()] = p.subject
+		if p.relay != id {
+			continue
 		}
+		r := readmit{who: who.String(), subject: p.subject}
+		if s, ok := f.shares[shareKey{p.subject, id}]; ok {
+			r.rate = s.given
+		}
+		back = append(back, r)
 	}
 	f.mu.Unlock()
 
-	for who, subject := range back {
-		_, sub, ok := f.store.subject(subject)
-		if !ok {
-			continue
+	for _, m := range back {
+		rate := m.rate
+		if rate <= 0 {
+			// No share yet, or one that was never pushed. The ceiling is
+			// the only honest answer, and a zero is not one: a relay
+			// reads it as no limit at all.
+			_, sub, ok := f.store.subject(m.subject)
+			if !ok {
+				continue
+			}
+			rate = sub.Max
 		}
 		if err := n.push(wire.Command{
 			Op:      wire.OpAdmit,
-			Peer:    who,
-			Subject: subject,
-			Rate:    sub.Max,
+			Peer:    m.who,
+			Subject: m.subject,
+			Rate:    rate,
 		}); err != nil {
 			break
 		}

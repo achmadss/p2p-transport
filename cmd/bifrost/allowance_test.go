@@ -185,3 +185,61 @@ func TestPlacingOnASecondRelayDoesNotOversell(t *testing.T) {
 	}
 	_ = one
 }
+
+// A relay that restarts must come back at the share it was holding. Its
+// subject's other relays have given nothing up, so re-admitting it at
+// the whole rate would make a restart a way to be allotted twice.
+func TestRestartComesBackAtItsShare(t *testing.T) {
+	const R = 10 << 20
+	f := testFleet(t)
+	one, _ := joinRecording(f, "one", 1<<30)
+	two, _ := joinRecording(f, "two", 1<<30)
+	if err := f.store.set("alice", 1<<20, R); err != nil {
+		t.Fatal(err)
+	}
+	// One machine of alice on each relay, so the rate is shared.
+	f.mu.Lock()
+	f.placed[peer.ID("a")] = &placement{relay: one, subject: "alice", expires: time.Now().Add(time.Hour)}
+	f.placed[peer.ID("b")] = &placement{relay: two, subject: "alice", expires: time.Now().Add(time.Hour)}
+	f.open("alice", one, R)
+	f.open("alice", two, R)
+	f.mu.Unlock()
+	f.divide("alice")
+
+	share := f.allotted("alice", one)
+	if share <= 0 || share >= R {
+		t.Fatalf("the relay holds %d of %d, want a share of it", share, R)
+	}
+
+	var pushed []wire.Command
+	f.register(one, wire.Register{Addrs: []string{"/relay/one"}, Bandwidth: 1 << 30}, json.NewEncoder(recorder{&pushed}))
+	if len(pushed) != 1 || pushed[0].Op != wire.OpAdmit {
+		t.Fatalf("a restarted relay was pushed %v, want one admit", pushed)
+	}
+	if pushed[0].Rate != share {
+		t.Fatalf("it came back at %d, want the %d it was holding", pushed[0].Rate, share)
+	}
+}
+
+// Nothing is ever admitted at a rate of zero. A relay reads zero as no
+// limit, so it is the one number that must never reach it by accident.
+func TestNothingIsAdmittedAtZero(t *testing.T) {
+	f := testFleet(t)
+	_, pushed := joinRecording(f, "a", 1<<30)
+	who := machine(t, f, "alice", 1<<20)
+	f.lease(who)
+
+	// A relay that has never carried the subject, coming back with no
+	// share recorded.
+	var back []wire.Command
+	f.register(peer.ID("a"), wire.Register{Addrs: []string{"/relay/a"}, Bandwidth: 1 << 30}, json.NewEncoder(recorder{&back}))
+
+	for _, c := range append(*pushed, back...) {
+		if c.Op == wire.OpAdmit && c.Rate <= 0 {
+			t.Fatalf("admitted %s at a rate of %d, which the relay reads as no limit", c.Peer, c.Rate)
+		}
+	}
+	if len(back) != 1 {
+		t.Fatalf("the restarted relay was pushed %v, want one admit", back)
+	}
+}

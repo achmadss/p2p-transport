@@ -156,7 +156,9 @@ func (f *fleet) report(id peer.ID, d wire.Demand) {
 	// here when bifrost is exposed to anything but its own relays.
 	until := time.Now().Add(3 * period)
 
-	touched := make([]string, 0, len(d.Reports))
+	// A set, not a list: dividing is a scan of every share, and a relay
+	// naming one subject twice must not buy two of them.
+	touched := map[string]bool{}
 	f.mu.Lock()
 	for _, r := range d.Reports {
 		s, ok := f.shares[shareKey{r.Subject, id}]
@@ -164,11 +166,11 @@ func (f *fleet) report(id peer.ID, d wire.Demand) {
 			continue // nothing of that subject is placed here
 		}
 		s.want, s.until = wantFrom(r), until
-		touched = append(touched, r.Subject)
+		touched[r.Subject] = true
 	}
 	f.mu.Unlock()
 
-	for _, subject := range touched {
+	for subject := range touched {
 		f.divide(subject)
 	}
 }
