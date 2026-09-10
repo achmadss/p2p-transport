@@ -34,9 +34,25 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$here")
 
 # One authentication for the whole run, however many times ssh is used.
+# One connection per machine, reused for the whole run, so a machine with
+# no key asks for its password once.
+#
+# The %C in the path is not decoration. It is a hash of the user, host and
+# port, and without it every machine shares one socket: the first
+# connection opens it, and every later ssh and scp is multiplexed onto
+# that same connection whatever host it was asked for. Installing a relay
+# reads the coordinator's log first, so the coordinator is the machine
+# that would own the socket — and the relay would be installed on the
+# coordinator instead, quietly, with one password prompt where there
+# should have been two.
 ctl=$(mktemp -u "${TMPDIR:-/tmp}/install-ssh.XXXXXX")
-SSHOPTS="-o ControlMaster=auto -o ControlPath=$ctl -o ControlPersist=120 -o StrictHostKeyChecking=accept-new"
-cleanup() { ssh $SSHOPTS -O exit "$TARGET" 2>/dev/null || true; }
+SSHOPTS="-o ControlMaster=auto -o ControlPath=$ctl-%C -o ControlPersist=120 -o StrictHostKeyChecking=accept-new"
+cleanup() {
+	for sock in "$ctl"-*; do
+		[ -S "$sock" ] || continue
+		ssh -o ControlPath="$sock" -O exit x 2>/dev/null || true
+	done
+}
 
 sh_on() { # sh_on <target> [args...] <script on stdin>
 	t=$1
@@ -106,6 +122,20 @@ heimdall)
 	*) addr=$(multiaddr_of "$from") ;;
 	esac
 	[ -n "$addr" ] || { echo "install: no coordinator address; is bifrost running on $from?" >&2; exit 1; }
+
+	# The relay and the coordinator must be two machines. They have been
+	# one before, when both connections were multiplexed onto one socket,
+	# and the only visible sign was a password asked once instead of
+	# twice. Ask each end who it is.
+	case $from in
+	/ip4/*) ;;
+	*)
+		if [ "$(ssh $SSHOPTS "$TARGET" hostname)" = "$(ssh $SSHOPTS "$from" hostname)" ]; then
+			echo "install: $TARGET and $from are the same machine; a relay must not be the coordinator" >&2
+			exit 1
+		fi
+		;;
+	esac
 
 	need heimdall-linux-amd64
 	scp $SSHOPTS "$root/dist/heimdall-linux-amd64" "$here/heimdall.service" "$TARGET:/tmp/" >/dev/null
