@@ -127,11 +127,7 @@ func (m *meter) flush() error {
 	if !m.dirty {
 		return nil
 	}
-	b, err := json.MarshalIndent(m.used, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(m.path, append(b, '\n'), 0o600); err != nil {
+	if err := config.WriteJSON(m.path, m.used); err != nil {
 		return err
 	}
 	m.dirty = false

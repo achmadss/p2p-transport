@@ -62,11 +62,7 @@ func openStore(dir string) (*store, error) {
 
 // save writes the whole file. The caller holds the lock.
 func (s *store) save() error {
-	b, err := json.MarshalIndent(s.subjects, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.path, append(b, '\n'), 0o600)
+	return config.WriteJSON(s.path, s.subjects)
 }
 
 // subject returns one subject by id.

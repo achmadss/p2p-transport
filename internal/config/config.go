@@ -120,10 +120,50 @@ func (c *Config) Save(dir string) error {
 	if err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(c, "", "  ")
+	return WriteJSON(p, c)
+}
+
+// WriteJSON writes v to path as indented JSON, and either the whole new
+// file is there afterwards or the whole old one still is.
+//
+// It writes a temporary file beside the target and renames it, because a
+// rename is the one write a crash cannot leave half done. Written in
+// place instead, a process killed mid-write leaves a truncated file, and
+// the next start refuses to parse it — which turns losing the last few
+// seconds of state into losing all of it.
+func WriteJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
+		return fmt.Errorf("encode %s: %w", filepath.Base(path), err)
 	}
 	b = append(b, '\n')
-	return os.WriteFile(p, b, filePerm)
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	// Cleans up after any failure below, and is a no-op once the rename
+	// has moved the file out from under this name.
+	defer os.Remove(tmp.Name())
+
+	// CreateTemp makes the file 0600 already; this says so out loud, so
+	// the permission does not depend on that staying true.
+	if err := tmp.Chmod(filePerm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Synced before the rename, or the rename can land before the bytes
+	// do and the atomic write is only atomic on paper.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
