@@ -144,8 +144,12 @@ create_one() {
 	# from nowhere and it does not say which one it handed out, so the
 	# address is drawn separately, checked against the blacklist, and put
 	# on afterwards.
-	set -- $(DEPA_LOCATION=$VPS_LOCATION "$(dirname "$0")/depa" ip new)
-	[ -n "${1:-}" ] || { echo "bootstrap: no usable address for $host" >&2; exit 1; }
+	new=$(DEPA_LOCATION=$VPS_LOCATION "$(dirname "$0")/depa" ip new) || {
+		echo "bootstrap: $host is $uuid and has no address." >&2
+		echo "bootstrap: give it one with: deploy/depa ip new, then deploy/depa ip move <ip-uuid> $uuid" >&2
+		exit 1
+	}
+	set -- $new
 	"$(dirname "$0")/depa" ip move "$1" "$uuid" >/dev/null
 	echo "  $uuid at $2" >&2
 }

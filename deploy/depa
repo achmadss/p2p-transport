@@ -102,9 +102,11 @@ ip_new() {
 	got=
 	i=0
 	while [ "$i" -lt 10 ]; do
-		addr=$(api POST /network/public/create -d "{\"location_id\":$LOCATION}" |
-			jq -r '.data.ip_address // empty')
-		[ -n "$addr" ] || { echo "depa: reserving an address failed" >&2; break; }
+		out=$(api POST /network/public/create -d "{\"location_id\":$LOCATION}")
+		addr=$(echo "$out" | jq -r '.data.ip_address // empty')
+		# The reply is the only thing that says why, so print it rather
+		# than the fact that something went wrong.
+		[ -n "$addr" ] || { echo "depa: reserving an address in location $LOCATION failed: $out" >&2; break; }
 		uuid=$(ip_rows | jq -r --arg a "$addr" 'select(.ip_address == $a) | .id' | head -n1)
 		[ -n "$uuid" ] || { echo "depa: reserved $addr but cannot find it" >&2; break; }
 		if ! banned "$addr"; then
@@ -149,7 +151,15 @@ clone)
 		jq -r '.data.uuid // empty')
 	[ -n "$uuid" ] || { echo "depa: clone failed" >&2; exit 1; }
 	echo "cloned $PREFIX$key as $uuid" >&2
-	set -- $(ip_new)
+	# The machine exists now whether or not it gets an address, so say
+	# what it is called before failing: otherwise it bills and nothing
+	# names it.
+	new=$(ip_new) || {
+		echo "depa: $PREFIX$key is $uuid and has no address." >&2
+		echo "depa: give it one with: depa ip new, then depa ip move <ip-uuid> $uuid" >&2
+		exit 1
+	}
+	set -- $new
 	api PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$uuid\"}" >/dev/null
 	echo "$uuid $2"
 	;;
