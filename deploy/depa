@@ -124,6 +124,18 @@ ip_new() {
 	echo "$got"
 }
 
+# ip_move attaches a reserved address to a machine and checks that it
+# did. The reply is the only confirmation there is, and a PATCH whose
+# output goes to /dev/null is a refusal that reads as success — which is
+# how a machine ends up running, billing and unreachable.
+ip_move() {
+	out=$(api PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$2\"}")
+	[ "$(echo "$out" | jq -r '.data.instance_id // empty')" = "$2" ] || {
+		echo "depa: putting $1 on $2 failed: $out" >&2
+		return 1
+	}
+}
+
 cmd=${1:-relays}
 case $cmd in
 relays)
@@ -160,7 +172,11 @@ clone)
 		exit 1
 	}
 	set -- $new
-	api PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$uuid\"}" >/dev/null
+	ip_move "$1" "$uuid" || {
+		echo "depa: $PREFIX$key is $uuid and $2 is reserved but not on it." >&2
+		echo "depa: attach it with: depa ip move $1 $uuid" >&2
+		exit 1
+	}
 	echo "$uuid $2"
 	;;
 destroy)
@@ -179,8 +195,7 @@ ip)
 		ip_new
 		;;
 	move)
-		api PATCH "/network/public/${3:?ip uuid}/change-instance" \
-			-d "{\"instance_id\":\"${4:?instance uuid}\"}" | jq .
+		ip_move "${3:?ip uuid}" "${4:?instance uuid}" && echo "${3} is on ${4}"
 		;;
 	rm)
 		api DELETE "/network/public/${3:?ip uuid}/delete" -H "_method: DELETE" | jq .

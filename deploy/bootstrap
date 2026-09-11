@@ -150,7 +150,11 @@ create_one() {
 		exit 1
 	}
 	set -- $new
-	"$(dirname "$0")/depa" ip move "$1" "$uuid" >/dev/null
+	"$(dirname "$0")/depa" ip move "$1" "$uuid" >/dev/null || {
+		echo "bootstrap: $host is $uuid and $2 is reserved but not on it." >&2
+		echo "bootstrap: attach it with: deploy/depa ip move $1 $uuid" >&2
+		exit 1
+	}
 	echo "  $uuid at $2" >&2
 }
 
