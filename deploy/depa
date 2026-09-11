@@ -28,7 +28,10 @@ LOCATION=${DEPA_LOCATION:-1}
 # machine wears them. Space or comma separated.
 BLACKLIST=${DEPA_IP_BLACKLIST:-}
 
-api() {
+# api_raw sends one request and prints the reply with the HTTP status on
+# a line of its own at the end. Only the caller that has to tell a
+# refusal from a machine that is not ready yet needs the status.
+api_raw() {
 	method=$1
 	path=$2
 	shift 2
@@ -36,8 +39,12 @@ api() {
 		-H "x-apikey: $DEPA_API_KEY" \
 		-H "Accept: application/json" \
 		-H "Content-Type: application/json" \
-		"$@"
+		-w '\n%{http_code}' "$@"
 }
+
+# api is api_raw without the status line, which is what every other
+# caller wants.
+api() { api_raw "$@" | sed '$d'; }
 
 # rows prints every instance in the account, one JSON object per line,
 # following the paging rather than trusting one page to hold everything.
@@ -128,12 +135,32 @@ ip_new() {
 # did. The reply is the only confirmation there is, and a PATCH whose
 # output goes to /dev/null is a refusal that reads as success — which is
 # how a machine ends up running, billing and unreachable.
+#
+# A machine cloned a moment ago is still being built and the provider
+# answers 5xx until it is ready, so that one is waited out. Every other
+# refusal is a refusal and asking again will not change it.
 ip_move() {
-	out=$(api PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$2\"}")
-	[ "$(echo "$out" | jq -r '.data.instance_id // empty')" = "$2" ] || {
-		echo "depa: putting $1 on $2 failed: $out" >&2
-		return 1
-	}
+	i=0
+	while :; do
+		out=$(api_raw PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$2\"}")
+		code=$(echo "$out" | tail -n1)
+		body=$(echo "$out" | sed '$d')
+		[ "$(echo "$body" | jq -r '.data.instance_id // empty')" = "$2" ] && return 0
+		case $code in
+		5*) ;;
+		*)
+			echo "depa: putting $1 on $2 failed: $body" >&2
+			return 1
+			;;
+		esac
+		i=$((i + 1))
+		[ "$i" -lt 12 ] || {
+			echo "depa: $2 never accepted $1 after two minutes: $body" >&2
+			return 1
+		}
+		echo "depa: $2 is not ready for an address yet, waiting" >&2
+		sleep 10
+	done
 }
 
 cmd=${1:-relays}
