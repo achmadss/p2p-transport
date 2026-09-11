@@ -22,6 +22,7 @@ type fake struct {
 	deleted  []string
 	status   int    // when non-zero, every request fails with this
 	lastHost string // hostname of the last clone
+	lastPub  bool   // whether the last clone asked for a public address
 }
 
 func (f *fake) serve(t *testing.T) *Client {
@@ -65,10 +66,12 @@ func (f *fake) serve(t *testing.T) *Client {
 		}
 		var body struct {
 			Hostname string `json:"hostname"`
+			PublicIP bool   `json:"use_public_ip"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		f.clones++
 		f.lastHost = body.Hostname
+		f.lastPub = body.PublicIP
 		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"uuid": "new-uuid"}})
 	})
 	mux.HandleFunc("DELETE /v1/instance/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +116,11 @@ func TestCreateClonesOnceForOneKey(t *testing.T) {
 	}
 	if f.lastHost != "heimdall-relay-1" {
 		t.Fatalf("hostname %q does not carry the key", f.lastHost)
+	}
+	// A clone is not given a public address unless it is asked for, and a
+	// relay nothing can dial is not a relay.
+	if !f.lastPub {
+		t.Fatal("the clone did not ask for a public address")
 	}
 
 	// The machine now exists, which is what a retry after a timeout would

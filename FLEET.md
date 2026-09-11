@@ -740,17 +740,21 @@ lock on that door — nothing rebuilds it, so losing it is not an outage
 that heals but an afternoon with a fresh Ubuntu and the install notes.
 `deploy/bootstrap` makes those two and refuses a name that would collide.
 
-A machine also has to be *prepared* to be copied, and the preparation is
-not optional. DEPA's Ubuntu image pins the network interface to a MAC
-address in netplan, a clone gets a new MAC, the match fails, and the
-clone boots with no network at all — not even ssh, so there is nothing to
-log into and ask. cloud-init does not rewrite it, because a clone
-inherits its memory of having already run. `deploy/install` therefore
-replaces the pin with a match on the interface name, tells cloud-init to
-leave networking alone, and empties the machine id, the ssh host keys and
-cloud-init's instance record, all of which name one machine and would
-otherwise name several. Every one of those fails silently: the provider
-says Running and something simply does not work.
+A machine also has to be *prepared* to be copied, and the preparation
+empties the machine id, the ssh host keys and cloud-init's instance
+record, all of which name one machine and would otherwise name several.
+Every one of those fails silently: the provider says Running and
+something simply does not work.
+
+What the preparation does **not** do is touch the network, and that is a
+correction rather than an omission. The provider's image pins the
+interface to a MAC address in netplan, so replacing the pin with a match
+on the interface name and telling cloud-init to leave networking alone
+looked like the obvious repair. It was applied, and the three clones made
+after it booted to a login prompt with no network at all — so it was not
+the fix, and rewriting a file the provider owns is not this repository's
+business. The provider configures a clone's address; the preparation
+leaves it alone.
 
 **DEPA publishes no bandwidth figure anywhere** — not per tier, not per
 size, not per location, not as a monthly transfer allowance. So

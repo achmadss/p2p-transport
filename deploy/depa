@@ -70,7 +70,7 @@ clone)
 		{ echo "key must be 1-40 of a-z 0-9 and -" >&2; exit 1; }
 	rows | jq -e --arg h "$PREFIX$key" 'select(.hostname == $h)' >/dev/null 2>&1 &&
 		{ echo "$PREFIX$key already exists" >&2; exit 1; }
-	api POST "/instance/$src/clone" -d "{\"hostname\":\"$PREFIX$key\"}" | jq .
+	api POST "/instance/$src/clone" -d "{\"hostname\":\"$PREFIX$key\",\"use_public_ip\":true}" | jq .
 	;;
 destroy)
 	api DELETE "/instance/${2:?uuid}" \

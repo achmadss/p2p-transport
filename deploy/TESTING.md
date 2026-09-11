@@ -85,27 +85,32 @@ stopped source was just as unreachable.
 **Replacing the image's MAC pin.** The provider's Ubuntu image pins the
 interface to the source machine's MAC address in netplan, and a clone
 gets a new MAC, so the match fails and nothing brings the interface up.
-That is certainly a bug and it is certainly fixed — `deploy/install` now
-matches on interface name, tells cloud-init to leave networking alone,
-and clears the machine id, the ssh host keys and cloud-init's instance
-record. It was applied to `relay-source` at 19:53 and the clone was made
-at 19:56, so the clone had it. It was not enough on its own.
+`deploy/install` was changed to match on interface name instead and to
+tell cloud-init to leave networking alone. It was applied to
+`relay-source` at 19:53 and the clone was made at 19:56, so the clone had
+it. **It made no difference, and it has since been reverted.** The
+provider configures a clone's address itself; rewriting a file it owns
+was a guess, and a wrong one.
 
 ## What to try next
 
-**Look at the screen.** The provider offers a VNC console. Open
-`heimdall-3` in the dashboard and see where the boot stops: a login
-prompt means the network is the whole problem, an initramfs shell means
-the filesystem is, and a blank screen means something earlier.
+**The console says Linux is fine.** `heimdall-3` was opened over VNC on
+11 Sep 2026 and it shows a login prompt and accepts one. So the machine
+boots, the disk is intact, and the only thing missing is the network.
+That rules out the filesystem and everything earlier than userspace.
 
-**Clone `bifrost` as a control.** Nothing has been done to that machine —
-no image preparation, no edited netplan. If its clone has no network
-either, then clones on this provider simply do not get one and the
-approach needs rethinking. If its clone works, the image preparation
-broke something. It costs about Rp30 and it is the experiment that
-separates "the provider" from "our doing".
+**The clone was never asked for a public address.** `/instance/create`
+takes `use_public_ip`, and `deploy/bootstrap` passes it — which is why
+`bifrost` and `relay-source` are reachable. The clone body was
+`{"hostname": ...}` and nothing else. Both the adapter and `deploy/depa`
+now send `use_public_ip: true` as well. This is the leading suspect and
+it has not been tested against the live API yet.
 
-Do the free one first.
+So: revert the network edits on `relay-source` if any survive on it,
+clone again, and see whether the new machine answers. If it still does
+not, the next thing to look at is what `ip addr` says at that login
+prompt — an interface with no address is DHCP going unanswered, and no
+interface at all is something else entirely.
 
 ## Bugs this bring-up found
 

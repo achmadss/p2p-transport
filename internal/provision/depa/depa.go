@@ -148,7 +148,10 @@ func (c *Client) Create(ctx context.Context, s provision.Spec) (provision.Machin
 			UUID string `json:"uuid"`
 		} `json:"data"`
 	}
-	body := map[string]string{"hostname": name}
+	// use_public_ip is what /instance/create is given and what makes a
+	// machine reachable. A clone is not given it by default, and a relay
+	// nothing can dial is not a relay.
+	body := map[string]any{"hostname": name, "use_public_ip": true}
 	if err := c.call(ctx, http.MethodPost, "/instance/"+url.PathEscape(src)+"/clone", body, &out); err != nil {
 		return provision.Machine{}, err
 	}
