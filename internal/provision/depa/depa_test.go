@@ -24,10 +24,10 @@ type fake struct {
 	lastHost string // hostname of the last clone
 	lastPub  bool   // whether the last clone asked for a public address
 
-	// The pool of public addresses. draw is handed out in order by the
-	// reserve call, ips is what the account holds, and moved records
-	// every attachment as "ip->instance".
-	draw    []string
+	// The pool of public addresses. pool is what the provider has to
+	// give, ips is what the account holds, and moved records every
+	// attachment as "ip->instance".
+	pool    []string
 	ips     []IP
 	moved   []string
 	dropped []string
@@ -125,11 +125,27 @@ func (f *fake) serve(t *testing.T) *Client {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		f.loc = body.Location
-		if len(f.draw) == 0 {
-			f.t.Fatal("the pool of addresses ran out")
+		// DEPA hands out the first free address in its pool, and an
+		// address released goes back into that pool — so the same one
+		// comes round again immediately. Anything that releases a bad
+		// draw before drawing again gets it straight back, which is the
+		// whole reason this fake models the pool rather than a queue.
+		addr := ""
+		for _, a := range f.pool {
+			taken := false
+			for _, ip := range f.ips {
+				taken = taken || ip.Address == a
+			}
+			if !taken {
+				addr = a
+				break
+			}
 		}
-		addr := f.draw[0]
-		f.draw = f.draw[1:]
+		if addr == "" {
+			f.t.Error("the pool of addresses ran out")
+			http.Error(w, `{"message":"no addresses"}`, http.StatusConflict)
+			return
+		}
 		f.ips = append(f.ips, IP{ID: "ip-" + addr, Address: addr})
 		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"ip_address": addr}})
 	})
@@ -186,7 +202,7 @@ func bare(uuid, host, status string) map[string]any {
 }
 
 func TestCreateClonesOnceForOneKey(t *testing.T) {
-	f := &fake{draw: []string{"203.0.113.7"}}
+	f := &fake{pool: []string{"203.0.113.7"}}
 	c := f.serve(t)
 
 	m, err := c.Create(context.Background(), provision.Spec{Key: "relay-1"})
@@ -362,12 +378,15 @@ func TestTheCloneSourceCannotBeDestroyed(t *testing.T) {
 
 // Some addresses in this account answer from nowhere. A relay wearing
 // one is a machine that bills and is never dialled, so a drawn address
-// on the list is released and another drawn — released, because a
-// reservation costs money whether or not anything holds it.
-func TestABlacklistedAddressIsReleasedAndRedrawn(t *testing.T) {
+// on the list is kept out of the way until a usable one turns up and
+// only then released — kept, because releasing it puts it back at the
+// front of the provider's pool and the next draw returns the same one;
+// released in the end, because a reservation costs money whether or not
+// anything holds it.
+func TestABlacklistedAddressIsHeldUntilAGoodOneIsDrawn(t *testing.T) {
 	f := &fake{
 		blocked: []string{"103.253.244.13", "103.253.244.14"},
-		draw:    []string{"103.253.244.13", "103.253.244.14", "203.0.113.9"},
+		pool:    []string{"103.253.244.13", "103.253.244.14", "203.0.113.9"},
 	}
 	c := f.serve(t)
 
@@ -395,7 +414,7 @@ func TestADrawThatKeepsComingUpBlacklistedStops(t *testing.T) {
 		pool = append(pool, a)
 		banned = append(banned, a)
 	}
-	f := &fake{blocked: banned, draw: pool}
+	f := &fake{blocked: banned, pool: pool}
 	c := f.serve(t)
 
 	_, err := c.Create(context.Background(), provision.Spec{Key: "relay-1"})
@@ -413,7 +432,7 @@ func TestADrawThatKeepsComingUpBlacklistedStops(t *testing.T) {
 func TestAnIdleAddressIsUsedBeforeANewOneIsBought(t *testing.T) {
 	f := &fake{
 		ips:  []IP{{ID: "ip-old", Address: "203.0.113.50"}},
-		draw: nil, // reserving anything at all would run the pool dry and fail
+		pool: nil, // reserving anything at all would find the pool empty and fail
 	}
 	c := f.serve(t)
 
@@ -431,7 +450,7 @@ func TestAnIdleAddressOnTheListIsSkipped(t *testing.T) {
 	f := &fake{
 		ips:     []IP{{ID: "ip-bad", Address: "103.253.244.13"}},
 		blocked: []string{"103.253.244.13"},
-		draw:    []string{"203.0.113.9"},
+		pool:    []string{"203.0.113.9"},
 	}
 	c := f.serve(t)
 
@@ -450,7 +469,7 @@ func TestAnIdleAddressOnTheListIsSkipped(t *testing.T) {
 func TestAMachineLeftWithoutAnAddressGetsOneOnTheRetry(t *testing.T) {
 	f := &fake{
 		rows: []map[string]any{bare("half-made", "heimdall-relay-1", "Running")},
-		draw: []string{"203.0.113.9"},
+		pool: []string{"203.0.113.9"},
 	}
 	c := f.serve(t)
 

@@ -104,6 +104,11 @@ That is why the console showed a login prompt, why ARP found nobody, and
 why nothing in the disk image was ever the problem. The netplan rewrite
 was chasing a fault that was never there.
 
+Releasing a bad address does not help on its own: DEPA hands out the
+first free address in its pool, and one released goes straight back to
+the front of it, so the next draw returns the same one. A bad draw is
+therefore held until a usable address turns up, and released only then.
+
 The fix is to stop taking the address the provider hands out.
 `bootstrap`, `deploy/depa clone` and the adapter all make machines with
 `use_public_ip: false` and then attach an address reserved separately and

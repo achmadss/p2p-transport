@@ -80,34 +80,46 @@ ip_rows() {
 }
 
 # ip_new reserves an address that is not blacklisted and prints
-# "<uuid> <address>". A blacklisted draw is released rather than kept,
-# because a reservation bills whether or not a machine holds it. An
-# address already reserved and attached to nothing is used first, for
-# the same reason.
+# "<uuid> <address>".
+#
+# A blacklisted draw is held rather than released. DEPA hands out the
+# first free address in its pool and an address released goes straight
+# back to the front of it, so releasing a bad draw before the next one
+# draws the same dead address forever. The bad ones are released at the
+# end, once they are no longer what the next draw would return, because
+# a reservation bills whether or not a machine holds it.
+#
+# An address already reserved and attached to nothing is used first, for
+# the same billing reason.
 ip_new() {
-	line=$(ip_rows | jq -r 'select((.instance.id // "") == "") | "\(.id) \(.ip_address)"')
-	for cand in $(echo "$line" | awk '{print $2}'); do
-		banned "$cand" && continue
-		echo "$line" | grep " $cand$" | head -n1
-		return 0
-	done
+	free=$(ip_rows | jq -r 'select((.instance.id // "") == "") | "\(.id) \(.ip_address)"')
+	echo "$free" | while read -r u a; do
+		[ -n "$a" ] || continue
+		banned "$a" || { echo "$u $a"; break; }
+	done | head -n1 | grep . && return 0
+
+	held=
+	got=
 	i=0
 	while [ "$i" -lt 10 ]; do
 		addr=$(api POST /network/public/create -d "{\"location_id\":$LOCATION}" |
 			jq -r '.data.ip_address // empty')
-		[ -n "$addr" ] || { echo "depa: reserving an address failed" >&2; return 1; }
+		[ -n "$addr" ] || { echo "depa: reserving an address failed" >&2; break; }
 		uuid=$(ip_rows | jq -r --arg a "$addr" 'select(.ip_address == $a) | .id' | head -n1)
-		[ -n "$uuid" ] || { echo "depa: reserved $addr but cannot find it" >&2; return 1; }
+		[ -n "$uuid" ] || { echo "depa: reserved $addr but cannot find it" >&2; break; }
 		if ! banned "$addr"; then
-			echo "$uuid $addr"
-			return 0
+			got="$uuid $addr"
+			break
 		fi
-		echo "depa: $addr is blacklisted, releasing it" >&2
-		api DELETE "/network/public/$uuid/delete" -H "_method: DELETE" >/dev/null
+		echo "depa: $addr is blacklisted, holding it so the next draw moves on" >&2
+		held="$held $uuid"
 		i=$((i + 1))
 	done
-	echo "depa: ten addresses in a row were all blacklisted" >&2
-	return 1
+	for u in $held; do
+		api DELETE "/network/public/$u/delete" -H "_method: DELETE" >/dev/null
+	done
+	[ -n "$got" ] || { echo "depa: no usable address" >&2; return 1; }
+	echo "$got"
 }
 
 cmd=${1:-relays}

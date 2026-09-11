@@ -108,6 +108,13 @@ func (c *Client) Banned(addr string) bool { return c.blacklist[addr] }
 // DEPA bills for a reservation whether or not a machine holds it, so
 // making a second one while the first sits idle pays twice for one
 // address.
+//
+// A blacklisted draw is held, not released. DEPA hands out the first
+// free address in its pool, and an address released goes straight back
+// to the front of it — so releasing a bad draw before the next one is a
+// loop that draws the same dead address until it gives up. Holding it
+// is what makes the pool move on. They are released at the end, once
+// they are no longer what the next draw would return.
 func (c *Client) freeIP(ctx context.Context) (IP, error) {
 	have, err := c.IPs(ctx)
 	if err != nil {
@@ -118,22 +125,39 @@ func (c *Client) freeIP(ctx context.Context) (IP, error) {
 			return ip, nil
 		}
 	}
+
+	var got IP
+	var held []IP
+	var fail error
 	for try := 0; try < maxIPTries; try++ {
 		ip, err := c.NewIP(ctx)
 		if err != nil {
-			return IP{}, err
+			fail = err
+			break
 		}
 		if !c.Banned(ip.Address) {
-			return ip, nil
+			got = ip
+			break
 		}
-		// It is on the list, so nothing will ever reach a machine wearing
-		// it. Dropping it now is what stops the draw from billing for a
-		// pile of addresses the fleet cannot use.
-		if err := c.DropIP(ctx, ip.ID); err != nil {
-			return IP{}, fmt.Errorf("depa: drew blacklisted %s and could not release it: %w", ip.Address, err)
+		held = append(held, ip)
+	}
+	for _, ip := range held {
+		// A release that fails leaks a reservation, and a reservation
+		// bills. It is still not worth failing a Create that has an
+		// address in hand: the machine is the point, and a stray address
+		// is visible in the account's own listing.
+		if err := c.DropIP(ctx, ip.ID); err != nil && fail == nil && got.ID == "" {
+			fail = fmt.Errorf("depa: drew blacklisted %s and could not release it: %w", ip.Address, err)
 		}
 	}
-	return IP{}, fmt.Errorf("depa: %d addresses in a row were all blacklisted", maxIPTries)
+	switch {
+	case got.ID != "":
+		return got, nil
+	case fail != nil:
+		return IP{}, fail
+	default:
+		return IP{}, fmt.Errorf("depa: %d addresses in a row were all blacklisted", maxIPTries)
+	}
 }
 
 // give puts a usable public address on a machine.

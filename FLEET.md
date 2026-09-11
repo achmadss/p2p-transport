@@ -768,9 +768,14 @@ So the adapter never takes the address a machine is given. Every machine
 is made with `use_public_ip: false` and then handed an address reserved
 separately, checked against `Options.Blacklist`, and attached with
 `PATCH /network/public/{id}/change-instance`. A drawn address on the list
-is released rather than kept, because a reservation bills whether or not
-a machine holds it, and an address the account already holds and nothing
-is using is taken before a new one is bought, for the same reason.
+is held rather than released, and the held ones are released only once a
+usable one is in hand: DEPA hands out the first free address in its pool
+and an address released goes straight back to the front of it, so
+releasing a bad draw before the next one draws the same dead address
+until the attempt limit runs out. Holding it is what makes the pool move
+on; releasing it afterwards is what stops the fleet paying for addresses
+it cannot use. An address the account already holds and nothing is using
+is taken before a new one is bought, for the same billing reason.
 Making the machine and giving it an address are two calls, so `Create`
 finishing the job on a machine it finds without one is what makes the
 retry mean something.
