@@ -41,6 +41,8 @@ environment:
   VPS_CPU         cores                                          (1)
   VPS_MEMORY      GB                                             (1)
   VPS_DISK        GB                                            (20)
+  DEPA_IP_BLACKLIST
+                  public addresses to never use, comma separated
 
 The tier, template and size defaults are what this account already runs.
 Read them off a machine you have with `deploy/depa detail <uuid>` before
@@ -135,10 +137,17 @@ create_one() {
 		'{location_id:$location_id, tier_id:$tier_id, template_id:$template_id,
 		  hostname:$hostname, cpu:$cpu, memory:$memory, storage:$storage,
 		  username:"root", password:$password, ssh_keys:[],
-		  use_dedicated_cpu:false, include_backup:false, use_public_ip:true}')")
+		  use_dedicated_cpu:false, include_backup:false, use_public_ip:false}')")
 	uuid=$(echo "$out" | jq -r '.data.uuid // empty')
 	[ -n "$uuid" ] || { echo "bootstrap: create failed: $out" >&2; exit 1; }
-	echo "  $uuid" >&2
+	# No address from the provider. Its pool holds addresses that answer
+	# from nowhere and it does not say which one it handed out, so the
+	# address is drawn separately, checked against the blacklist, and put
+	# on afterwards.
+	set -- $(DEPA_LOCATION=$VPS_LOCATION "$(dirname "$0")/depa" ip new)
+	[ -n "${1:-}" ] || { echo "bootstrap: no usable address for $host" >&2; exit 1; }
+	"$(dirname "$0")/depa" ip move "$1" "$uuid" >/dev/null
+	echo "  $uuid at $2" >&2
 }
 
 # wait_running polls until a machine answers with an address, because a

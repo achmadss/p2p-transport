@@ -2,7 +2,7 @@
 # Put the software on the machines bootstrap bought.
 #
 #   deploy/install bifrost  root@1.2.3.4
-#   deploy/install heimdall root@5.6.7.8 root@1.2.3.4
+#   deploy/install heimdall root@5.6.7.8 '/ip4/1.2.3.4/udp/4002/quic-v1/p2p/12D3Koo...'
 #
 # bootstrap talks to the provider's API, and no provider API can install
 # a program. This is the other half, over ssh.
@@ -20,7 +20,10 @@ set -eu
 usage() {
 	cat >&2 <<'USAGE'
 usage: install bifrost  <ssh-target>
-       install heimdall <ssh-target> <coordinator ssh-target | multiaddr>
+       install heimdall <ssh-target> <coordinator address | ssh-target>
+
+The coordinator address is the line `install bifrost` prints. An ssh
+target works too and reads the address off that machine's log.
 
 environment:
   HEIMDALL_BANDWIDTH   what a relay claims it can forward, per
@@ -114,7 +117,8 @@ REMOTE
 	echo "coordinator is up:"
 	echo "  $addr"
 	echo
-	echo "next: deploy/install heimdall <relay ssh-target> $TARGET"
+	echo "next, with that address in single quotes:"
+	echo "  deploy/install heimdall <relay ssh-target> '$addr'"
 	;;
 
 heimdall)

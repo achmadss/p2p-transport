@@ -18,11 +18,13 @@
 package depa
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +41,11 @@ func live(t *testing.T) *Client {
 	if key == "" || src == "" {
 		t.Skip("set DEPA_API_KEY and DEPA_SOURCE to run the live tests")
 	}
-	c, err := New(Options{APIKey: key, Source: src, Bandwidth: bandwidth})
+	loc, _ := strconv.Atoi(cmp.Or(os.Getenv("DEPA_LOCATION"), "1"))
+	c, err := New(Options{
+		APIKey: key, Source: src, Bandwidth: bandwidth, Location: loc,
+		Blacklist: strings.Split(os.Getenv("DEPA_IP_BLACKLIST"), ","),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +101,7 @@ func TestLiveReadOnly(t *testing.T) {
 // loop with a typo in its configuration retries for ever.
 func TestLiveBadKeyIsFatal(t *testing.T) {
 	live(t) // for the skip
-	c, err := New(Options{APIKey: "not-a-key", Source: os.Getenv("DEPA_SOURCE"), Bandwidth: bandwidth})
+	c, err := New(Options{APIKey: "not-a-key", Source: os.Getenv("DEPA_SOURCE"), Bandwidth: bandwidth, Location: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

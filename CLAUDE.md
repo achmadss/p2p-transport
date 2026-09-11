@@ -358,9 +358,12 @@ than a machine built from a spec, and the coordinator's address is baked
 into that instance; it has no idempotency key, so the hostname carries
 one and `Create` lists before it clones; and it publishes no bandwidth
 figure anywhere, so `Size.Bandwidth` is measured on a real machine and
-passed in, and the client refuses to exist without it. None of those
-three facts reached the interface, which is the whole point of having
-one. `deploy/` holds the systemd units for both servers and a shell
+passed in, and the client refuses to exist without it; and its pool of
+public addresses holds ones that answer from nowhere and it will not say
+which one it gave, so no machine is made with an address at all — each is
+made bare and handed one reserved separately, checked against a
+blacklist, and attached afterwards. None of those four facts reached the
+interface, which is the whole point of having one. `deploy/` holds the systemd units for both servers and a shell
 front end to the same account, and the adapter's live tests — behind a
 `live` build tag, so they never run in the normal suite — clone a real
 machine and destroy it again when `DEPA_LIVE_CLONE` is set.

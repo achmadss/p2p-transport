@@ -92,25 +92,34 @@ it. **It made no difference, and it has since been reverted.** The
 provider configures a clone's address itself; rewriting a file it owns
 was a guess, and a wrong one.
 
+## What it was
+
+**The provider's address pool contains addresses that answer from
+nowhere.** 103.253.244.13 is one. It does not ping from anywhere, on any
+machine it is attached to, and a freshly reserved address on the same
+machine works at once. So the clones were fine all along: they booted,
+they ran, and the address they were handed was dead.
+
+That is why the console showed a login prompt, why ARP found nobody, and
+why nothing in the disk image was ever the problem. The netplan rewrite
+was chasing a fault that was never there.
+
+The fix is to stop taking the address the provider hands out.
+`bootstrap`, `deploy/depa clone` and the adapter all make machines with
+`use_public_ip: false` and then attach an address reserved separately and
+checked against a blacklist. Put the bad ones in `DEPA_IP_BLACKLIST`
+(comma separated) for the shell tools, or `Options.Blacklist` for the
+adapter.
+
+Known bad, as of 11 Sep 2026: **103.253.244.13**.
+
 ## What to try next
 
-**The console says Linux is fine.** `heimdall-3` was opened over VNC on
-11 Sep 2026 and it shows a login prompt and accepts one. So the machine
-boots, the disk is intact, and the only thing missing is the network.
-That rules out the filesystem and everything earlier than userspace.
-
-**The clone was never asked for a public address.** `/instance/create`
-takes `use_public_ip`, and `deploy/bootstrap` passes it — which is why
-`bifrost` and `relay-source` are reachable. The clone body was
-`{"hostname": ...}` and nothing else. Both the adapter and `deploy/depa`
-now send `use_public_ip: true` as well. This is the leading suspect and
-it has not been tested against the live API yet.
-
-So: revert the network edits on `relay-source` if any survive on it,
-clone again, and see whether the new machine answers. If it still does
-not, the next thing to look at is what `ip addr` says at that login
-prompt — an interface with no address is DHCP going unanswered, and no
-interface at all is something else entirely.
+A clone now comes up with a vetted address, so the next thing is the one
+that has never happened: an agent leasing a relay from this fleet and
+moving a byte through it. After that, measure what one of these machines
+really forwards per direction and replace the `50M` placeholder in
+`HEIMDALL_BANDWIDTH` with it.
 
 ## Bugs this bring-up found
 

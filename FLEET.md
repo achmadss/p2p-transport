@@ -756,6 +756,29 @@ the fix, and rewriting a file the provider owns is not this repository's
 business. The provider configures a clone's address; the preparation
 leaves it alone.
 
+**The provider's address pool contains addresses that answer from
+nowhere**, and it will not say which one it gave you. 103.253.244.13 was
+found this way on 11 Sep 2026: it does not ping from anywhere, on any
+machine it is attached to, and a fresh address on the same machine works.
+That is not a fault the fleet can detect quickly — a relay wearing a dead
+address registers with nothing, bills by the hour, and looks exactly like
+a relay that is still starting.
+
+So the adapter never takes the address a machine is given. Every machine
+is made with `use_public_ip: false` and then handed an address reserved
+separately, checked against `Options.Blacklist`, and attached with
+`PATCH /network/public/{id}/change-instance`. A drawn address on the list
+is released rather than kept, because a reservation bills whether or not
+a machine holds it, and an address the account already holds and nothing
+is using is taken before a new one is bought, for the same reason.
+Making the machine and giving it an address are two calls, so `Create`
+finishing the job on a machine it finds without one is what makes the
+retry mean something.
+
+That is the fourth DEPA fact the interface does not carry, and the reason
+it does not is the same as for the other three: `Provisioner` says
+`Machine.Addrs`, and where those came from is the adapter's business.
+
 **DEPA publishes no bandwidth figure anywhere** — not per tier, not per
 size, not per location, not as a monthly transfer allowance. So
 `Size.Bandwidth` comes from `Options.Bandwidth`, a number measured on a

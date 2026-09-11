@@ -9,6 +9,10 @@
 #   deploy/depa detail <uuid>
 #   deploy/depa clone <source-uuid> <key>  makes heimdall-<key>
 #   deploy/depa destroy <uuid>
+#   deploy/depa ip                         reserved public addresses
+#   deploy/depa ip new                     reserve one, never a blacklisted one
+#   deploy/depa ip move <ip-uuid> <uuid>   put an address on a machine
+#   deploy/depa ip rm <ip-uuid>            release an address
 #
 # Needs curl and jq. The prefix must match the adapter's, because that
 # prefix is the whole of what the fleet claims to own.
@@ -18,6 +22,11 @@ set -eu
 : "${DEPA_API_KEY:?set DEPA_API_KEY}"
 BASE=${DEPA_BASE:-https://api.depa.id/v1}
 PREFIX=${DEPA_PREFIX:-heimdall-}
+LOCATION=${DEPA_LOCATION:-1}
+
+# Addresses this account holds that answer from nowhere, whichever
+# machine wears them. Space or comma separated.
+BLACKLIST=${DEPA_IP_BLACKLIST:-}
 
 api() {
 	method=$1
@@ -50,6 +59,57 @@ table() {
 		     { printf "%-38s %-24s %-10s %-16s %s\n", $1, $2, $3, $4, $5 }'
 }
 
+# banned says whether an address is one the fleet refuses to use.
+banned() {
+	for bad in $(echo "$BLACKLIST" | tr ',' ' '); do
+		[ "$1" = "$bad" ] && return 0
+	done
+	return 1
+}
+
+# ip_rows prints every reserved public address, one JSON object per line.
+ip_rows() {
+	page=1
+	while :; do
+		body=$(api GET "/network/public/reserved?limit=100&page=$page")
+		echo "$body" | jq -c '.data.data[]?'
+		total=$(echo "$body" | jq -r '.data.page.total_pages // 0')
+		page=$((page + 1))
+		[ "$page" -gt "$total" ] && break
+	done
+}
+
+# ip_new reserves an address that is not blacklisted and prints
+# "<uuid> <address>". A blacklisted draw is released rather than kept,
+# because a reservation bills whether or not a machine holds it. An
+# address already reserved and attached to nothing is used first, for
+# the same reason.
+ip_new() {
+	line=$(ip_rows | jq -r 'select((.instance.id // "") == "") | "\(.id) \(.ip_address)"')
+	for cand in $(echo "$line" | awk '{print $2}'); do
+		banned "$cand" && continue
+		echo "$line" | grep " $cand$" | head -n1
+		return 0
+	done
+	i=0
+	while [ "$i" -lt 10 ]; do
+		addr=$(api POST /network/public/create -d "{\"location_id\":$LOCATION}" |
+			jq -r '.data.ip_address // empty')
+		[ -n "$addr" ] || { echo "depa: reserving an address failed" >&2; return 1; }
+		uuid=$(ip_rows | jq -r --arg a "$addr" 'select(.ip_address == $a) | .id' | head -n1)
+		[ -n "$uuid" ] || { echo "depa: reserved $addr but cannot find it" >&2; return 1; }
+		if ! banned "$addr"; then
+			echo "$uuid $addr"
+			return 0
+		fi
+		echo "depa: $addr is blacklisted, releasing it" >&2
+		api DELETE "/network/public/$uuid/delete" -H "_method: DELETE" >/dev/null
+		i=$((i + 1))
+	done
+	echo "depa: ten addresses in a row were all blacklisted" >&2
+	return 1
+}
+
 cmd=${1:-relays}
 case $cmd in
 relays)
@@ -70,15 +130,47 @@ clone)
 		{ echo "key must be 1-40 of a-z 0-9 and -" >&2; exit 1; }
 	rows | jq -e --arg h "$PREFIX$key" 'select(.hostname == $h)' >/dev/null 2>&1 &&
 		{ echo "$PREFIX$key already exists" >&2; exit 1; }
-	api POST "/instance/$src/clone" -d "{\"hostname\":\"$PREFIX$key\",\"use_public_ip\":true}" | jq .
+	# No address from the clone: DEPA draws one from a pool holding
+	# addresses that answer from nowhere, and does not say which it gave.
+	uuid=$(api POST "/instance/$src/clone" \
+		-d "{\"hostname\":\"$PREFIX$key\",\"use_public_ip\":false}" |
+		jq -r '.data.uuid // empty')
+	[ -n "$uuid" ] || { echo "depa: clone failed" >&2; exit 1; }
+	echo "cloned $PREFIX$key as $uuid" >&2
+	set -- $(ip_new)
+	api PATCH "/network/public/$1/change-instance" -d "{\"instance_id\":\"$uuid\"}" >/dev/null
+	echo "$uuid $2"
 	;;
 destroy)
 	api DELETE "/instance/${2:?uuid}" \
 		-H "_method: DELETE" \
 		-d '{"remove_ip":true,"remove_block_storage":true}' | jq .
 	;;
+ip)
+	case ${2:-list} in
+	list)
+		ip_rows | jq -r '[.id, .ip_address, (.instance.hostname // "-"), .cost] | @tsv' |
+			awk 'BEGIN { printf "%-38s %-16s %-24s %s\n", "IP UUID", "ADDRESS", "ON", "COST" }
+			     { printf "%-38s %-16s %-24s %s\n", $1, $2, $3, $4 }'
+		;;
+	new)
+		ip_new
+		;;
+	move)
+		api PATCH "/network/public/${3:?ip uuid}/change-instance" \
+			-d "{\"instance_id\":\"${4:?instance uuid}\"}" | jq .
+		;;
+	rm)
+		api DELETE "/network/public/${3:?ip uuid}/delete" -H "_method: DELETE" | jq .
+		;;
+	*)
+		echo "usage: depa ip [list|new|move <ip-uuid> <instance-uuid>|rm <ip-uuid>]" >&2
+		exit 2
+		;;
+	esac
+	;;
 *)
-	echo "usage: depa relays|all|detail <uuid>|clone <src> <key>|destroy <uuid>" >&2
+	echo "usage: depa relays|all|detail <uuid>|clone <src> <key>|destroy <uuid>|ip ..." >&2
 	exit 2
 	;;
 esac

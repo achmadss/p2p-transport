@@ -68,6 +68,19 @@ type Options struct {
 	// speed unless that figure is already per direction.
 	Bandwidth int64
 
+	// Location is DEPA's numeric data centre id, from GET /v1/locations.
+	// Reserving a public address is the one call here that needs it: a
+	// clone inherits its location from the source instance, but an
+	// address is reserved on its own and has to be told where.
+	Location int
+
+	// Blacklist is public addresses the fleet must never use. Some
+	// addresses in this account are reachable from nowhere no matter
+	// which machine holds them, and a relay wearing one is a machine
+	// paid for and never dialled. An address drawn from the pool that is
+	// on this list is released and another drawn.
+	Blacklist []string
+
 	// Prefix marks the hostnames this fleet owns. Machines without it are
 	// somebody else's and are never listed or destroyed.
 	Prefix string
@@ -82,6 +95,8 @@ type Client struct {
 	key       string
 	source    string
 	bandwidth int64
+	location  int
+	blacklist map[string]bool
 	prefix    string
 	base      string
 	http      *http.Client
@@ -96,14 +111,21 @@ func New(o Options) (*Client, error) {
 		return nil, errors.New("depa: no source instance to clone")
 	case o.Bandwidth <= 0:
 		return nil, errors.New("depa: bandwidth must be measured and positive")
+	case o.Location <= 0:
+		return nil, errors.New("depa: no location to reserve public addresses in")
 	}
 	c := &Client{
 		key:       o.APIKey,
 		source:    o.Source,
 		bandwidth: o.Bandwidth,
+		location:  o.Location,
+		blacklist: make(map[string]bool, len(o.Blacklist)),
 		prefix:    cmp.Or(o.Prefix, defaultPrefix),
 		base:      strings.TrimSuffix(cmp.Or(o.BaseURL, defaultBase), "/"),
 		http:      o.HTTP,
+	}
+	for _, a := range o.Blacklist {
+		c.blacklist[a] = true
 	}
 	if c.http == nil {
 		c.http = &http.Client{Timeout: 30 * time.Second}
@@ -139,6 +161,16 @@ func (c *Client) Create(ctx context.Context, s provision.Spec) (provision.Machin
 	}
 	for _, m := range have {
 		if m.Key == s.Key {
+			// The address is put on in a second call, so a Create that
+			// died between the two leaves a machine nothing can reach.
+			// Finishing the job here is what makes the retry mean
+			// something; without it the machine bills forever and is
+			// never dialled.
+			if len(m.Addrs) == 0 && m.State != provision.Gone {
+				if err := c.give(ctx, m.ID); err != nil {
+					return provision.Machine{}, err
+				}
+			}
 			return m, nil
 		}
 	}
@@ -148,15 +180,22 @@ func (c *Client) Create(ctx context.Context, s provision.Spec) (provision.Machin
 			UUID string `json:"uuid"`
 		} `json:"data"`
 	}
-	// use_public_ip is what /instance/create is given and what makes a
-	// machine reachable. A clone is not given it by default, and a relay
-	// nothing can dial is not a relay.
-	body := map[string]any{"hostname": name, "use_public_ip": true}
+	// No address from the clone. The address DEPA would hand out is
+	// drawn from a pool that contains ones nothing can reach, and there
+	// is no way to say which one a clone gets. So the machine is made
+	// bare and given an address this adapter picked and vetted.
+	body := map[string]any{"hostname": name, "use_public_ip": false}
 	if err := c.call(ctx, http.MethodPost, "/instance/"+url.PathEscape(src)+"/clone", body, &out); err != nil {
 		return provision.Machine{}, err
 	}
 	if out.Data.UUID == "" {
 		return provision.Machine{}, errors.New("depa: clone returned no uuid")
+	}
+	if err := c.give(ctx, out.Data.UUID); err != nil {
+		// The machine exists and is named, so the next Create finds it by
+		// name and gives it an address then. Saying so here is what stops
+		// that retry from looking like a second machine.
+		return provision.Machine{}, fmt.Errorf("depa: %s has no address yet: %w", name, err)
 	}
 	// Starting, with no address and no creation time. The address arrives
 	// in a later listing, and the relay is usable when it registers
@@ -180,7 +219,13 @@ func (c *Client) Destroy(ctx context.Context, id string) error {
 	// The _method header is DEPA's own requirement for DELETE, not a
 	// workaround for anything here.
 	body := map[string]bool{"remove_ip": true, "remove_block_storage": true}
-	err := c.call(ctx, http.MethodDelete, "/instance/"+url.PathEscape(id), body, nil)
+	return ignoreGone(c.call(ctx, http.MethodDelete, "/instance/"+url.PathEscape(id), body, nil))
+}
+
+// ignoreGone turns "it is not there" into success. Every delete here
+// exists to make something stop existing, so finding it already gone is
+// the outcome asked for rather than a failure.
+func ignoreGone(err error) error {
 	var s *statusError
 	if errors.As(err, &s) && (s.code == http.StatusNotFound || s.code == http.StatusGone) {
 		return nil
